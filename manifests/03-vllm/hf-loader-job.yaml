@@ -1,0 +1,38 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hf-weight-loader
+  namespace: vllm
+spec:
+  template:
+    metadata:
+      annotations:
+        gke-gcsfuse/volumes: "true"
+    spec:
+      serviceAccountName: envoy-ai-ksa
+      restartPolicy: OnFailure
+      containers:
+      - name: loader
+        image: python:3.10-slim
+        command:
+        - /bin/bash
+        - -c
+        - |
+          pip install -U huggingface_hub
+          python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='google/gemma-2-2b-it', token=os.environ['HF_TOKEN'], local_dir='/data/google/gemma-2-2b-it')"
+        env:
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: token
+        volumeMounts:
+        - name: gcs-fuse-csi-ephemeral
+          mountPath: /data
+      volumes:
+      - name: gcs-fuse-csi-ephemeral
+        csi:
+          driver: gcsfuse.csi.storage.gke.io
+          volumeAttributes:
+            bucketName: GCS_BUCKET_NAME_PLACEHOLDER
+            mountOptions: "implicit-dirs"

@@ -1,0 +1,62 @@
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: partner-vllm-backend
+  namespace: routing
+spec:
+  schema:
+    name: OpenAI
+  backendRef:
+    group: gateway.envoyproxy.io
+    kind: Backend
+    name: vllm-backend
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: partner-router
+  namespace: routing
+  annotations:
+    aigateway.envoyproxy.io/processing-body-mode: buffered
+spec:
+  parentRefs:
+    - name: envoy-ai-gateway
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  hostnames:
+    - partner.agent-router.internal
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_total_token
+      type: TotalToken
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: gemma-rr
+      backendRefs:
+        - name: partner-vllm-backend
+          modelNameOverride: gemma-rr
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: partner-apikey
+  namespace: routing
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: partner-router
+  apiKeyAuth:
+    credentialRefs:
+      - name: partner-api-keys
+    extractFrom:
+      - headers:
+          - X-API-Key
+    forwardClientIDHeader: x-tenant-id
+    sanitize: true

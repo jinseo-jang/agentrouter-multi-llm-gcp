@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-server
+  namespace: vllm
+spec:
+  replicas: 2
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: vllm-server
+  template:
+    metadata:
+      labels:
+        app: vllm-server
+      annotations:
+        gke-gcsfuse/volumes: "true"
+    spec:
+      serviceAccountName: envoy-ai-ksa
+      tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      containers:
+      - name: vllm
+        image: vllm/vllm-openai:v0.29.0
+        args:
+        - "--model"
+        - "/data/google/gemma-2-2b-it"
+        - "--served-model-name"
+        - "gemma-rr"
+        - "gemma-epp"
+        - "gemma-epp-noprefix"
+        - "/data/google/gemma-2-2b-it"
+        - "--enable-prefix-caching"
+        - "--gpu-memory-utilization"
+        - "0.4"
+        - "--port"
+        - "8000"
+        ports:
+        - containerPort: 8000
+          name: http
+        resources:
+          requests:
+            cpu: "2"
+            memory: "10Gi"
+            nvidia.com/gpu: 1
+          limits:
+            nvidia.com/gpu: 1
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 40
+          periodSeconds: 10
+          failureThreshold: 10
+        volumeMounts:
+        - name: gcs-fuse-csi-ephemeral
+          mountPath: /data
+          readOnly: true
+      volumes:
+      - name: gcs-fuse-csi-ephemeral
+        csi:
+          driver: gcsfuse.csi.storage.gke.io
+          readOnly: true
+          volumeAttributes:
+            bucketName: GCS_BUCKET_NAME_PLACEHOLDER
+            mountOptions: "implicit-dirs"

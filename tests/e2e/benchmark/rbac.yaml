@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: e2e-benchmark-sa
+  namespace: default
+  annotations:
+    iam.gke.io/gcp-service-account: GSA_EMAIL_PLACEHOLDER
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: e2e-benchmark-clusterrole
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/status", "services"]
+  verbs: ["get", "list", "watch", "delete", "deletecollection"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: e2e-benchmark-clusterrolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: e2e-benchmark-clusterrole
+subjects:
+- kind: ServiceAccount
+  name: e2e-benchmark-sa
+  namespace: default

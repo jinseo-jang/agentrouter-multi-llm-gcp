@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: envoy-ai-gateway
+  namespace: routing
+  annotations:
+    aigateway.envoyproxy.io/gateway-config: envoy-ai-gateway-config
+spec:
+  gatewayClassName: envoy-ai-gw-class
+  listeners:
+    - name: http
+      port: 8080
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same

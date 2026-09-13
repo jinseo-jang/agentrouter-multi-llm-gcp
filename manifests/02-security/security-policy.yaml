@@ -1,0 +1,30 @@
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: agent-router-jwt
+  namespace: routing
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: envoy-ai-gateway
+  jwt:
+    providers:
+      - name: gcip-employee
+        issuer: https://securetoken.google.com/PROJECT_ID_PLACEHOLDER
+        audiences:
+          - PROJECT_ID_PLACEHOLDER
+        remoteJWKS:
+          uri: https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com
+        claimToHeaders:
+          - claim: department
+            header: x-tenant-id
+      - name: google-workload
+        issuer: https://accounts.google.com
+        audiences:
+          - https://agent-router.internal
+        remoteJWKS:
+          uri: https://www.googleapis.com/oauth2/v3/certs
+        claimToHeaders:
+          - claim: email
+            header: x-tenant-id

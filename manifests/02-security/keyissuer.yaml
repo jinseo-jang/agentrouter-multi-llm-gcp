@@ -1,0 +1,149 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keyissuer
+  namespace: routing
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: keyissuer
+  namespace: routing
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["partner-api-keys"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: keyissuer
+  namespace: routing
+subjects:
+  - kind: ServiceAccount
+    name: keyissuer
+    namespace: routing
+roleRef:
+  kind: Role
+  name: keyissuer
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keyissuer-script
+  namespace: routing
+data:
+  server.py: |
+    import http.server
+    import json
+    import os
+    import random
+    import ssl
+    import string
+    import urllib.request
+
+    TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+    K8S_API = "https://kubernetes.default.svc/api/v1/namespaces/routing/secrets/partner-api-keys"
+
+    def patch_secret(client_id, api_key):
+        with open(TOKEN_PATH) as f:
+            token = f.read().strip()
+        ctx = ssl.create_default_context(cafile=CA_PATH)
+        payload = json.dumps({"stringData": {client_id: api_key}}).encode("utf-8")
+        req = urllib.request.Request(
+            K8S_API,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/strategic-merge-patch+json",
+                "Accept": "application/json",
+            },
+            method="PATCH",
+        )
+        with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
+            return resp.status
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            if self.path == "/issue":
+                rand_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+                client_id = f"partner-{rand_id}"
+                rand_key = "".join(random.choices(string.ascii_letters + string.digits, k=24))
+                api_key = f"pk-{client_id}-{rand_key}"
+                try:
+                    patch_secret(client_id, api_key)
+                    res = {
+                        "status": "success",
+                        "client_id": client_id,
+                        "api_key": api_key,
+                    }
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps(res).encode("utf-8"))
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode("utf-8"))
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, format, *args):
+            print(format % args)
+
+    if __name__ == "__main__":
+        server = http.server.HTTPServer(("0.0.0.0", 8080), Handler)
+        print("Key issuer listening on port 8080...")
+        server.serve_forever()
+  client.py: |
+    import urllib.request
+    req = urllib.request.Request("http://localhost:8080/issue", method="POST")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        print(resp.read().decode("utf-8"))
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keyissuer
+  namespace: routing
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keyissuer
+  template:
+    metadata:
+      labels:
+        app: keyissuer
+    spec:
+      serviceAccountName: keyissuer
+      containers:
+        - name: app
+          image: python:3.11-slim
+          command: ["python3", "/app/server.py"]
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: script-vol
+              mountPath: /app
+      volumes:
+        - name: script-vol
+          configMap:
+            name: keyissuer-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keyissuer
+  namespace: routing
+spec:
+  selector:
+    app: keyissuer
+  ports:
+    - port: 8080
+      targetPort: 8080

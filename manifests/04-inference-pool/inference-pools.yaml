@@ -1,0 +1,33 @@
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+metadata:
+  name: prefix-scorer-pool
+  namespace: vllm
+spec:
+  selector:
+    matchLabels:
+      app: vllm-server
+  targetPorts:
+    - number: 8000
+  endpointPickerRef:
+    kind: Service
+    name: llm-d-router
+    port:
+      number: 9000
+---
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+metadata:
+  name: generic-pool
+  namespace: vllm
+spec:
+  selector:
+    matchLabels:
+      app: vllm-server
+  targetPorts:
+    - number: 8000
+  endpointPickerRef:
+    kind: Service
+    name: llm-d-router-noprefix
+    port:
+      number: 9000

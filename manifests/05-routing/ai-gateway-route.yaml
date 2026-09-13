@@ -1,0 +1,207 @@
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: vertex-ai-backend
+  namespace: routing
+spec:
+  endpoints:
+    - fqdn:
+        hostname: asia-southeast1-aiplatform.googleapis.com
+        port: 443
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: vertex-ai-tls
+  namespace: routing
+spec:
+  targetRefs:
+    - group: "gateway.envoyproxy.io"
+      kind: Backend
+      name: vertex-ai-backend
+  validation:
+    wellKnownCACertificates: "System"
+    hostname: asia-southeast1-aiplatform.googleapis.com
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: vertex-ai-backend
+  namespace: routing
+spec:
+  schema:
+    name: GCPVertexAI
+  backendRef:
+    name: vertex-ai-backend
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: vertex-ai-credentials
+  namespace: routing
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: vertex-ai-backend
+  type: GCPCredentials
+  gcpCredentials:
+    projectName: PROJECT_ID_PLACEHOLDER
+    region: asia-southeast1
+    credentialsFile:
+      secretRef:
+        name: vertex-ai-sa-key
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: vertex-ai-global-backend
+  namespace: routing
+spec:
+  endpoints:
+    - fqdn:
+        hostname: aiplatform.googleapis.com
+        port: 443
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: vertex-ai-global-tls
+  namespace: routing
+spec:
+  targetRefs:
+    - group: "gateway.envoyproxy.io"
+      kind: Backend
+      name: vertex-ai-global-backend
+  validation:
+    wellKnownCACertificates: "System"
+    hostname: aiplatform.googleapis.com
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: vertex-ai-claude-backend
+  namespace: routing
+spec:
+  schema:
+    name: GCPAnthropic
+    version: "vertex-2023-10-16"
+  backendRef:
+    name: vertex-ai-global-backend
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: vertex-ai-claude-credentials
+  namespace: routing
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: vertex-ai-claude-backend
+  type: GCPCredentials
+  gcpCredentials:
+    projectName: PROJECT_ID_PLACEHOLDER
+    region: global
+    credentialsFile:
+      secretRef:
+        name: vertex-ai-sa-key
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: vllm-backend
+  namespace: routing
+spec:
+  endpoints:
+    - fqdn:
+        hostname: vllm-service.vllm.svc.cluster.local
+        port: 8000
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: vllm-rr-backend
+  namespace: routing
+spec:
+  schema:
+    name: OpenAI
+  backendRef:
+    name: vllm-backend
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: envoy-ai-gw-router
+  namespace: routing
+  annotations:
+    aigateway.envoyproxy.io/processing-body-mode: buffered
+spec:
+  parentRefs:
+    - name: envoy-ai-gateway
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_total_token
+      type: TotalToken
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: gemini-2.5-flash
+      backendRefs:
+        - name: vertex-ai-backend
+          modelNameOverride: gemini-2.5-flash
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: sonnet-5
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: claude-sonnet-5
+      backendRefs:
+        - name: vertex-ai-claude-backend
+          modelNameOverride: claude-sonnet-5
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: gemma-rr
+      backendRefs:
+        - name: vllm-rr-backend
+          modelNameOverride: gemma-rr
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: gemma-epp
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: prefix-scorer-pool
+          namespace: vllm
+          modelNameOverride: gemma-epp
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: gemma-epp-noprefix
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: generic-pool
+          namespace: vllm
+          modelNameOverride: gemma-epp-noprefix

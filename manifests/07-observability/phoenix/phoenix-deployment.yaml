@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: phoenix
+  namespace: phoenix
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: phoenix
+  template:
+    metadata:
+      labels:
+        app: phoenix
+    spec:
+      serviceAccountName: phoenix-ksa
+      containers:
+        - name: phoenix
+          image: arizephoenix/phoenix:latest
+          ports:
+            - containerPort: 6006
+            - containerPort: 4317
+          env:
+            - name: PHOENIX_SQL_DATABASE_URL
+              value: "postgresql://phoenix:phoenix_password@127.0.0.1:5432/phoenix"
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.1.0
+          args:
+            - "--port=5432"
+            - "SQL_CONNECTION_NAME_PLACEHOLDER"
+          securityContext:
+            runAsNonRoot: true

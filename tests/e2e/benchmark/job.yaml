@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: e2e-benchmark-job
+  namespace: default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app: e2e-benchmark
+    spec:
+      serviceAccountName: e2e-benchmark-sa
+      restartPolicy: Never
+      containers:
+        - name: run-benchmark
+          image: python:3.11-slim
+          command:
+            - bash
+            - "-c"
+            - |
+              pip install --no-cache-dir requests aiohttp kubernetes numpy && cd /app && python -u benchmark.py
+          volumeMounts:
+            - name: script-volume
+              mountPath: /app
+      volumes:
+        - name: script-volume
+          configMap:
+            name: e2e-benchmark-cm

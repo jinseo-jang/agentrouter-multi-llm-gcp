@@ -1,0 +1,311 @@
+{
+  "displayName": "vLLM Model Server Monitoring",
+  "dashboardFilters": [
+    {
+      "filterType": "RESOURCE_LABEL",
+      "labelKey": "cluster",
+      "stringValue": "envoy-ai-gw-cluster",
+      "valueType": "STRING"
+    },
+    {
+      "filterType": "RESOURCE_LABEL",
+      "labelKey": "namespace",
+      "stringValue": "vllm",
+      "valueType": "STRING"
+    },
+    {
+      "filterType": "METRIC_LABEL",
+      "labelKey": "pod",
+      "stringValue": "",
+      "templateVariable": "pod",
+      "valueType": "STRING"
+    },
+    {
+      "filterType": "METRIC_LABEL",
+      "labelKey": "model_name",
+      "stringValue": "",
+      "templateVariable": "model_name",
+      "valueType": "STRING"
+    }
+  ],
+  "etag": "1a7904a80b2d3880face43751e1d22fc",
+  "mosaicLayout": {
+    "columns": 48,
+    "tiles": [
+      {
+        "height": 4,
+        "width": 48,
+        "xPos": 0,
+        "yPos": 0,
+        "widget": {
+          "title": "vLLM Model Server Monitoring Overview",
+          "text": {
+            "content": "### vLLM Model Server Performance & Cache Monitoring\nCluster: `envoy-ai-gw-cluster` | Namespace: `vllm` | Filters: `pod`, `model_name` | Collector: `Google Cloud Managed Service for Prometheus (GMP)`",
+            "format": "MARKDOWN"
+          }
+        }
+      },
+      {
+        "height": 6,
+        "width": 12,
+        "xPos": 0,
+        "yPos": 4,
+        "widget": {
+          "title": "KV Cache Usage % (Current)",
+          "scorecard": {
+            "gaugeView": {
+              "lowerBound": 0.0,
+              "upperBound": 100.0
+            },
+            "timeSeriesQuery": {
+              "prometheusQuery": "avg(vllm:kv_cache_usage_perc{namespace=\"vllm\", ${pod}, ${model_name}}) * 100",
+              "unitOverride": "%"
+            }
+          }
+        }
+      },
+      {
+        "height": 6,
+        "width": 12,
+        "xPos": 12,
+        "yPos": 4,
+        "widget": {
+          "title": "Prefix Cache Hit Rate % (Current)",
+          "scorecard": {
+            "gaugeView": {
+              "lowerBound": 0.0,
+              "upperBound": 100.0
+            },
+            "timeSeriesQuery": {
+              "prometheusQuery": "(sum(vllm:prefix_cache_hits_total{namespace=\"vllm\", ${pod}, ${model_name}}) / (sum(vllm:prefix_cache_queries_total{namespace=\"vllm\", ${pod}, ${model_name}}) > 0)) * 100 or vector(0)",
+              "unitOverride": "%"
+            }
+          }
+        }
+      },
+      {
+        "height": 6,
+        "width": 12,
+        "xPos": 24,
+        "yPos": 4,
+        "widget": {
+          "title": "Running Requests (Total)",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "prometheusQuery": "sum(vllm:num_requests_running{namespace=\"vllm\", ${pod}, ${model_name}})"
+            }
+          }
+        }
+      },
+      {
+        "height": 6,
+        "width": 12,
+        "xPos": 36,
+        "yPos": 4,
+        "widget": {
+          "title": "Waiting Requests (Total)",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "prometheusQuery": "sum(vllm:num_requests_waiting{namespace=\"vllm\", ${pod}, ${model_name}})"
+            }
+          }
+        }
+      },
+      {
+        "height": 14,
+        "width": 24,
+        "xPos": 0,
+        "yPos": 10,
+        "widget": {
+          "title": "vLLM Prefix Cache Hits & Queries (Rate / Counter)",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "legendTemplate": "Hits Rate - ${pod} [${model_name}]",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (pod, model_name) (rate(vllm:prefix_cache_hits_total{namespace=\"vllm\", ${pod}, ${model_name}}[${__interval}]))",
+                  "unitOverride": "1/s"
+                }
+              },
+              {
+                "legendTemplate": "Queries Rate - ${pod} [${model_name}]",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (pod, model_name) (rate(vllm:prefix_cache_queries_total{namespace=\"vllm\", ${pod}, ${model_name}}[${__interval}]))",
+                  "unitOverride": "1/s"
+                }
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "height": 14,
+        "width": 24,
+        "xPos": 24,
+        "yPos": 10,
+        "widget": {
+          "title": "vLLM KV Cache Usage % (Gauge)",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "legendTemplate": "KV Cache Usage % - ${pod} [${model_name}]",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "prometheusQuery": "avg by (pod, model_name) (vllm:kv_cache_usage_perc{namespace=\"vllm\", ${pod}, ${model_name}}) * 100",
+                  "unitOverride": "%"
+                }
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "height": 14,
+        "width": 24,
+        "xPos": 0,
+        "yPos": 24,
+        "widget": {
+          "title": "vLLM Running & Waiting Requests (Queue & Concurrency)",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "legendTemplate": "Running - ${pod} [${model_name}]",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (pod, model_name) (vllm:num_requests_running{namespace=\"vllm\", ${pod}, ${model_name}})",
+                  "unitOverride": "1"
+                }
+              },
+              {
+                "legendTemplate": "Waiting - ${pod} [${model_name}]",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (pod, model_name) (vllm:num_requests_waiting{namespace=\"vllm\", ${pod}, ${model_name}})",
+                  "unitOverride": "1"
+                }
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "height": 14,
+        "width": 24,
+        "xPos": 24,
+        "yPos": 24,
+        "widget": {
+          "title": "vLLM Time to First Token (TTFT) Latency (s)",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "legendTemplate": "TTFT p95 - ${pod} [${model_name}]",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "prometheusQuery": "histogram_quantile(0.95, sum by (le, pod, model_name) (rate(vllm:time_to_first_token_seconds_bucket{namespace=\"vllm\", ${pod}, ${model_name}}[${__interval}])))",
+                  "unitOverride": "s"
+                }
+              },
+              {
+                "legendTemplate": "TTFT p50 - ${pod} [${model_name}]",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "prometheusQuery": "histogram_quantile(0.50, sum by (le, pod, model_name) (rate(vllm:time_to_first_token_seconds_bucket{namespace=\"vllm\", ${pod}, ${model_name}}[${__interval}])))",
+                  "unitOverride": "s"
+                }
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "height": 14,
+        "width": 24,
+        "xPos": 0,
+        "yPos": 38,
+        "widget": {
+          "title": "vLLM Generation Token Throughput (tokens/s)",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "legendTemplate": "Tokens/s - ${pod} [${model_name}]",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (pod, model_name) (rate(vllm:generation_tokens_total{namespace=\"vllm\", ${pod}, ${model_name}}[${__interval}]))",
+                  "unitOverride": "1/s"
+                }
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "height": 14,
+        "width": 24,
+        "xPos": 24,
+        "yPos": 38,
+        "widget": {
+          "title": "vLLM Request Throughput (req/s)",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "legendTemplate": "Req/s - ${pod} [${model_name}]",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (pod, model_name) (rate(vllm:request_success_total{namespace=\"vllm\", ${pod}, ${model_name}}[${__interval}]))",
+                  "unitOverride": "1/s"
+                }
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

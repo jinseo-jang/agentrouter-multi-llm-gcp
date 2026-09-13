@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: envoy-ai-gateway-ratelimit
+  namespace: envoy-gateway-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: envoy-ai-gateway-ratelimit
+  template:
+    metadata:
+      labels:
+        app: envoy-ai-gateway-ratelimit
+    spec:
+      containers:
+        - name: ratelimit
+          command:
+            - /bin/ratelimit
+          image: docker.io/envoyproxy/ratelimit:8fe6ea42
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+              name: grpc
+          env:
+            - name: LOG_LEVEL
+              value: debug
+            - name: REDIS_SOCKET_TYPE
+              value: tcp
+            - name: REDIS_URL
+              value: redis.redis-system.svc.cluster.local:6379
+            - name: RUNTIME_ROOT
+              value: /data
+            - name: RUNTIME_SUBDIRECTORY
+              value: ratelimit
+            - name: USE_STATSD
+              value: "false"
+            - name: CONFIG_TYPE
+              value: GRPC_XDS_SOTW
+            - name: CONFIG_GRPC_XDS_NODE_ID
+              value: envoy-ai-gateway-ratelimit
+            - name: CONFIG_GRPC_XDS_SERVER_URL
+              value: ai-gateway-controller.default.svc.cluster.local:18002
+            - name: GRPC_PORT
+              value: "8081"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: envoy-ai-gateway-ratelimit
+  namespace: envoy-gateway-system
+  labels:
+    app.kubernetes.io/name: envoy-ai-gateway-ratelimit
+spec:
+  ports:
+  - name: grpc
+    port: 8081
+    protocol: TCP
+    targetPort: 8081
+  - name: metrics
+    port: 19001
+    protocol: TCP
+    targetPort: 19001
+  selector:
+    app: envoy-ai-gateway-ratelimit
+  type: ClusterIP

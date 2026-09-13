@@ -1,0 +1,36 @@
+# Terraform state and credentials
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+.terraform/
+.terraform.lock.hcl
+tfplan
+
+# Keys and credentials
+*.key
+*sa*.json
+*credential*.json
+*secret*.json
+vertex-ai-sa-key.json
+firebase-sa.json
+
+# Binaries and archives
+*.zip
+*.tar.gz
+tf_bin
+bin/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# OS artifacts
+.DS_Store
+.env
+.idea/
+.vscode/
+
+# Agent scratch and internal run artifacts
+.agents/
+AGENTS.md

@@ -1,0 +1,355 @@
+---
+# Source: ai-gateway-helm/templates/serviceaccount.yaml
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ai-gateway-controller
+  namespace: default
+  labels:
+    helm.sh/chart: ai-gateway-helm-v1.1.0
+    app.kubernetes.io/name: ai-gateway-helm
+    app.kubernetes.io/instance: ai-gateway
+    app.kubernetes.io/version: "v1.1.0"
+    app.kubernetes.io/managed-by: Helm
+---
+# Source: ai-gateway-helm/templates/admission_webhook.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: self-signed-cert-for-mutating-webhook
+  namespace: default
+data:
+  ca.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURNakNDQWhxZ0F3SUJBZ0lSQUkvejRTakJQSXUwcHNITmdoMnZjRmd3RFFZSktvWklodmNOQVFFTEJRQXcKSXpFaE1COEdBMVVFQXhNWVlXa3RaMkYwWlhkaGVTMWpiMjUwY205c2JHVnlMV05oTUI0WERUSTJNRGt4TVRBNApNVEkxTWxvWERUTTJNRGt3T0RBNE1USTFNbG93SXpFaE1COEdBMVVFQXhNWVlXa3RaMkYwWlhkaGVTMWpiMjUwCmNtOXNiR1Z5TFdOaE1JSUJJakFOQmdrcWhraUc5dzBCQVFFRkFBT0NBUThBTUlJQkNnS0NBUUVBcVZKK09mNkUKN2xXZXpJbkR2U0FGQXJtOUhxTzROa3lBU0RaSFU4dHhwUlJZYUFoOG5XZTQxdUJLbzVya0N6YlJCemNXNzVlawpzTVhUamVTeGZwN0duK3U4RmhlOWY1dEVqQWRLTit5Wit4YTV2anFkOXRaVkIzTUJGOWpZcFlKaTZyWDljTk9iCjhzK1UxUkpUL3dKSy9lTi96eXlraGhpMm9ka3VSL2xGYlNjdUMzMW50bG9acVZJVlhRWCttdHJNOW5Lek1rRG4KbE5iTTNYdXFEMzVuR0lKNit0NnhBZ1dLdnBINGN6VVB6d2l4OGhHTkZPN3NvWHh1UHZjUkxSMkxrbjhkbS83WgpCbW1xaUNlZ0NramRnNUpSeVd0bDRpZERCTGVPcmtkL1pHbTljL2JmOWQ5VVIvRGczN0hIZ1lWbEh2emNKWmE5CmpxV0svdU9yYWsrUllRSURBUUFCbzJFd1h6QU9CZ05WSFE4QkFmOEVCQU1DQXFRd0hRWURWUjBsQkJZd0ZBWUkKS3dZQkJRVUhBd0VHQ0NzR0FRVUZCd01DTUE4R0ExVWRFd0VCL3dRRk1BTUJBZjh3SFFZRFZSME9CQllFRkJ1NgpuOVBwZUp2dmZsb0srLzNBdzNCWmJSYzNNQTBHQ1NxR1NJYjNEUUVCQ3dVQUE0SUJBUUJJQkhqb2JRZ2hlUmFUCkVpVEVlT2RyVG40UHhlUXlwZlJlc1pPdmxId1B2NHJ3bjFCaCs0WXJDQU9nTWRCNVdLQXZxMmM5bW04ZlpKQjYKdDhlaE1RZUMvQ3F3Ym5PM1gyeHdGdXBQQkVlUFdqNjNlVndwQ3lMTk5saHZabEo5OGdGUFEweE1ueXh4VU9IWApUeDFEbkorUU9NbTYvWGdXOTJWU2QreEh6MkgzR3dWb295aTBUb0kwRmFCVHphU0Z2NVV4UUdTREhGZnRiWExGCjNxbzdNb2hjYUovUm5SbHA4MGxsbkRzUVpyNDkxeVdsR3FueWpMS3lPbEZjbUNrS1AyWC9NRlozYVNreHo5RnkKZGpONzhPdTcwVGtZOFh4bEc2NE9VS0V5ZFQ1WTRSWHFzbFNCNVg4ZnRuWVloUmg3bE1lUjlqb3VPUVdnbk5PTAppd1J0LzB5TAotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==
+  tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUQwekNDQXJ1Z0F3SUJBZ0lRSXRKNE5VTzlNbk9MSkR1eWorR3ZWakFOQmdrcWhraUc5dzBCQVFzRkFEQWoKTVNFd0h3WURWUVFERXhoaGFTMW5ZWFJsZDJGNUxXTnZiblJ5YjJ4c1pYSXRZMkV3SGhjTk1qWXdPVEV4TURneApNalV5V2hjTk1qY3dPVEV4TURneE1qVXlXakFzTVNvd0tBWURWUVFERXlGaGFTMW5ZWFJsZDJGNUxXTnZiblJ5CmIyeHNaWEl1WkdWbVlYVnNkQzV6ZG1Nd2dnRWlNQTBHQ1NxR1NJYjNEUUVCQVFVQUE0SUJEd0F3Z2dFS0FvSUIKQVFDdjMvR1FaYzZzcTBUU0dBWmRyTllIcittbXBJY2RldmlYeUFaUTdtRXNQTDdobnVyTUhEeStGeTRhSEFrVwpWcmRSMnZXOUVMTVVOcXZ4M3JYVHRvUGJxRjU3NngwcmlMSWVFVVdveWN6VGVtWjE1aGlJSGhvSG9FUTMzd05oCjVPNnplMkZwenpOWnRXVnB1ZlBxSFZUSmRzSTF5bllTRlMvWTd0MXUvdXBmSEF5dElxV3lzRjcrQ00zN2pyc3QKSThQMkxlb3JiZVhZaWlFUDRLUGpPdWZ0NEpZVDhkenVrMUVsakdQc3JENWlYOVhpR0RLQkwxSEtMZmk2MC93cgo4Ung0eHVLb2YyeU9NZzVjazVOc2ZzL0RQZVpZTms5NlJTNmNpdDUrRzZqWDlLNnp4K2dzVERyamdRdTdSaC8wCmxyMjVvOWFSZG5WQ1hCdHdkSWE0Y1hXckFnTUJBQUdqZ2Zrd2dmWXdEZ1lEVlIwUEFRSC9CQVFEQWdXZ01CMEcKQTFVZEpRUVdNQlFHQ0NzR0FRVUZCd01CQmdnckJnRUZCUWNEQWpBTUJnTlZIUk1CQWY4RUFqQUFNQjhHQTFVZApJd1FZTUJhQUZCdTZuOVBwZUp2dmZsb0srLzNBdzNCWmJSYzNNSUdWQmdOVkhSRUVnWTB3Z1lxQ0ZXRnBMV2RoCmRHVjNZWGt0WTI5dWRISnZiR3hsY29JZFlXa3RaMkYwWlhkaGVTMWpiMjUwY205c2JHVnlMbVJsWm1GMWJIU0MKSVdGcExXZGhkR1YzWVhrdFkyOXVkSEp2Ykd4bGNpNWtaV1poZFd4MExuTjJZNEl2WVdrdFoyRjBaWGRoZVMxagpiMjUwY205c2JHVnlMbVJsWm1GMWJIUXVjM1pqTG1Oc2RYTjBaWEl1Ykc5allXd3dEUVlKS29aSWh2Y05BUUVMCkJRQURnZ0VCQUFDNzFLNVZyMDFhNGgzbnl2TnRUOU5NekFVUGxFUGxTNUJJamN6cEcrWElVNTRsbzRMV3ptdmEKNStpS3d6ZytiYjg0M1VvcnhtbDdzQ2J3Rms0bnNIazZwbDBadjB2V3k1NXhBd1NkaHErYmFtdXgrN0hWQXpVKwp6U1dDcjZ1QjhOVnp6d3g4U2VLZUVZQ1BXMS81bC9DQmhZSHdJVnNGd0NWNzJDSGVNcFpLdEhCZVNiTUlzNldLClpkM1NGbTQ1eE9JUjRoL3FBdGNqdm1aZDVSK1ZDeXFPbzQ3TDFFNVFNZVhCWjBXYTFHbnlYUzhJckVGWDNlSWgKNkV5dTh5YU5hTEM3YThBcXZ6VmRrN0l1VjhWcVRpVHNzSUdQc1RtamdYWnA3VHdRN1hwbXZOVWIrUVV2OUMrTQpwZndMSXAzR1NhRVBiYXdqL2NWcWFURW14TFp6endZPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==
+  tls.key: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFb2dJQkFBS0NBUUVBcjkveGtHWE9yS3RFMGhnR1hheldCNi9wcHFTSEhYcjRsOGdHVU81aExEeSs0WjdxCnpCdzh2aGN1R2h3SkZsYTNVZHIxdlJDekZEYXI4ZDYxMDdhRDI2aGVlK3NkSzRpeUhoRkZxTW5NMDNwbWRlWVkKaUI0YUI2QkVOOThEWWVUdXMzdGhhYzh6V2JWbGFibno2aDFVeVhiQ05jcDJFaFV2Mk83ZGJ2N3FYeHdNclNLbApzckJlL2dqTis0NjdMU1BEOWkzcUsyM2wySW9oRCtDajR6cm43ZUNXRS9IYzdwTlJKWXhqN0t3K1lsL1Y0aGd5CmdTOVJ5aTM0dXRQOEsvRWNlTWJpcUg5c2pqSU9YSk9UYkg3UHd6M21XRFpQZWtVdW5JcmVmaHVvMS9TdXM4Zm8KTEV3NjQ0RUx1MFlmOUphOXVhUFdrWFoxUWx3YmNIU0d1SEYxcXdJREFRQUJBb0lCQUdKZFQ4L0JBUHlWdGFJRAppZHZ1aEs0Nzl1UWE5TzdLRGl0bDFoS0JvSnVMUmY4T1VLZmp5eDFOL1p6Z3ZUeGZONXh5YUNwY0lxeFZmNG1CClZCU2E2ZGg2ckkyR0RBU0RLWXVqZ1dCTHJXRkIvZmhHdnNXeWdFQnZwSGZUSlNNbFZWUFExOFREL0NaYVMrUDcKK3EyZnhnSC9oOU5wN3V0aUtpYWNRZ0NJVmpEbW80M1grMGk3QkE2WWFnQS9pWENGM1NKSVRqbW0xenpGR3hkegphaEFQT0ppdE13UjF6cFB2bUhaYTY0TUJocTlGVmN2a1BrNkFWL1I1TWV5ZGkreHVPLzhBYklqdEd5ZnBXZWdXClB0bXRwaFlvbmQvanRIWnRKcXptczF5SnoxUkR1N1hhMGQvRVZMOExXby8vaTg2SmdFV1V0blZyelFVeVFSTG0KMkdIVk0zRUNnWUVBeVkyWHJwbjJvZmJ0dnlTdHA1NG5yekgyd3p4NGlFUWtwMUx3UTNVL3JOcFBibC9hY1QvcAoxYi9zNUZXOUgweUtZSWdFL0RGWWt2Nm91UW5hMWk1OURXQ1VrdklmQ2lPQ25aVjdwUHF3V3FtcERsdUFGS3NQCjJBUFZ0SVV3SXZOR0hralltdTIxZVExTEZlV3JkYzhXR0UrTlZMMlduZXhoTVZ5ZjFLZnlIZzBDZ1lFQTMyS1IKRnVscGlqb29PZDhmc3Y1LzhoK29LdGhMVHFvQTBkeDJWbTZQSDgrS3dubjJoSVVlWGdrZFBsRERZMm5YQ3hsagpCc3pJUGlydVdEL0tYVC9idXRzbXcwQUdOQmNZTVBsRVl2RXEzRVczZzJCcjhXZDdNMmpiS0FXbXJHUE5LMUVlCkNzZElaNHlLV0xVckszT3o2ekY3R0FCckFYL3JKRit1SHFMMXJKY0NnWUFKbnJCMnJQS1FtSENRaHZlaTRIR1UKY3hZTUMzN1ZRaXRkc1IrMm1Jb0pmZ0g4aXFhcWNScUFFVUVGUlBKWjVCVld0aWRHd2pRd0QrZU5yV0s4aGt1QgpyL0puY1JiNkxPZTNEY054QkdZV2JiS2I5TklRS25uL0hXKzl4ZjJlTFc1VFU3YkM3a1dUR1lkVDdEcGF6UitJCjJZTXRZRDhvR25ncEd2cWw4NzRpb1FLQmdCbUd5TyttVXBJaUhUQ254NWFMc0pFNWZ0ME9oR1NEMXI0a2hEMVMKT3ZhMm43T2pma0VjZVNEang3eTBPKytqUzVpUUdSblEwdDBQeU5hNnkyUW1oUFJ3VUppbE8xQStoMXdwVCtCQwprTlJFL3poN0R6cXh5WWxSWlNISXE0Z3RpMmQweUlzUXhMeFllZ0t6Q1REWTh1bGdhU0dRQXFwVU5NbWVTV1prCjF0QVhBb0dBRmtINUYrYTBXQnRpTjhPemxtbkNWbTJBT05Ybkp5V214UUVDKzdEUmxkMHRpb210Y1lYVy9tRnQKNEk5VlZxVk5EbmtjcE8zUCsreW9LTkg5b2ZGYWN0b25OOEFORE8zeFg2ODVQZDR2elhMSm1WMnN0RlRBc04wRAplMzV6Z3dhNWZXQ29oMUVRVVIzNXR6VFZQYVB3TUpubVFiQUpEbEkvK1NjbTdSYWhEejQ9Ci0tLS0tRU5EIFJTQSBQUklWQVRFIEtFWS0tLS0tCg==
+---
+# Source: ai-gateway-helm/templates/envoy_gateway_cluster_role_for_inference_pool.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: "envoy-ai-gateway-inference-pool-reader:default"
+rules:
+  - apiGroups:
+      - "inference.networking.k8s.io"
+    resources:
+      - "inferencepools"
+    verbs:
+      - "get"
+      - "list"
+      - "watch"
+---
+# Source: ai-gateway-helm/templates/serviceaccount.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: "ai-gateway-controller:default"
+rules:
+  - apiGroups: [""]
+    resources:
+      - services
+      - secrets
+      - pods # TODO: this can be limited to EG system namespace, not the cluster level.
+    verbs:
+      - '*'
+  - apiGroups: ["apps"]
+    resources:
+      - deployments # TODO: this can be limited to EG system namespace, not the cluster level.
+      - daemonsets # TODO: this can be limited to EG system namespace, not the cluster level.
+    verbs:
+      - '*'
+  - apiGroups:
+      - inference.networking.k8s.io
+    resources:
+      - '*'
+    verbs:
+      - '*'
+  - apiGroups:
+      - gateway.networking.k8s.io
+    resources:
+      - '*'
+    verbs:
+      - '*'
+  - apiGroups:
+      - aigateway.envoyproxy.io
+    resources:
+      - '*'
+    verbs:
+      - '*'
+  - apiGroups:
+      - gateway.envoyproxy.io
+    resources:
+      - '*'
+    verbs:
+      - '*'
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - get
+      - watch
+      - list
+      - create
+      - update
+  - apiGroups:
+      - apiextensions.k8s.io
+    resources:
+      - customresourcedefinitions
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+  - apiGroups:
+      - admissionregistration.k8s.io
+    resources:
+      - mutatingwebhookconfigurations
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - admissionregistration.k8s.io
+    resources:
+      - mutatingwebhookconfigurations
+    resourceNames:
+      - 'envoy-ai-gateway-gateway-pod-mutator.default'
+    verbs:
+      - update
+      - patch
+---
+# Source: ai-gateway-helm/templates/envoy_gateway_cluster_role_for_inference_pool.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: "envoy-ai-gateway-inference-pool-reader-binding:default"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: "envoy-ai-gateway-inference-pool-reader:default"
+subjects:
+  - kind: ServiceAccount
+    # The service account name is hardcoded to "envoy-gateway":
+    # https://github.com/envoyproxy/gateway/blob/70af785fba094929bc6044a57470d429205c4d5e/charts/gateway-helm/templates/envoy-gateway-serviceaccount.yaml#L4
+    name: envoy-gateway
+    namespace: envoy-gateway-system
+---
+# Source: ai-gateway-helm/templates/serviceaccount.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: "ai-gateway-controller:default"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: "ai-gateway-controller:default"
+subjects:
+  - kind: ServiceAccount
+    name: ai-gateway-controller
+    namespace: 'default'
+---
+# Source: ai-gateway-helm/templates/service.yaml
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-gateway-controller
+  namespace: default
+  labels:
+    helm.sh/chart: ai-gateway-helm-v1.1.0
+    app.kubernetes.io/name: ai-gateway-helm
+    app.kubernetes.io/instance: ai-gateway
+    app.kubernetes.io/version: "v1.1.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  ports:
+    - appProtocol: http
+      name: mutating-webhook
+      port: 9443
+      protocol: TCP
+      targetPort: 9443
+    - appProtocol: grpc
+      name: grpc
+      port: 1063
+      protocol: TCP
+      targetPort: 1063
+    - appProtocol: http
+      name: http-metrics
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    - appProtocol: grpc
+      name: ratelimit-xds
+      port: 18002
+      protocol: TCP
+      targetPort: 18002
+  selector:
+    app.kubernetes.io/name: ai-gateway-helm
+    app.kubernetes.io/instance: ai-gateway
+---
+# Source: ai-gateway-helm/templates/deployment.yaml
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-gateway-controller
+  namespace: default
+  labels:
+    helm.sh/chart: ai-gateway-helm-v1.1.0
+    app.kubernetes.io/name: ai-gateway-helm
+    app.kubernetes.io/instance: ai-gateway
+    app.kubernetes.io/version: "v1.1.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ai-gateway-helm
+      app.kubernetes.io/instance: ai-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ai-gateway-helm
+        app.kubernetes.io/instance: ai-gateway
+    spec:
+      serviceAccountName: ai-gateway-controller
+      hostNetwork: false
+      securityContext:
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ai-gateway-helm
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+            runAsGroup: 65532
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          image: "docker.io/envoyproxy/ai-gateway-controller:v1.1.0"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9443
+            - containerPort: 1063
+            - containerPort: 8080
+            - containerPort: 18002
+          args:
+            - -logLevel=info
+            - -logFormat=text
+            - --extProcImage=docker.io/envoyproxy/ai-gateway-extproc:v1.1.0
+            - --extProcImagePullPolicy=IfNotPresent
+            - --extProcLogLevel=info
+            - --extProcLogFormat=text
+            - --envoyGatewayNamespace=envoy-gateway-system
+            - "--endpointPrefixes=openai:,cohere:/cohere,anthropic:/anthropic"
+            - --tlsCertDir=/certs
+            - --tlsCertName=tls.crt
+            - --tlsKeyName=tls.key
+            - --webhookPort=9443
+            - --enableLeaderElection=true
+            - --rootPrefix=/
+            - --cacheSyncTimeout=2m
+            - --watchNamespaces=
+            - --quotaRateLimitServiceAddr=envoy-ai-gateway-ratelimit.envoy-gateway-system
+            - --quotaRateLimitTimeout=5
+            - --quotaRateLimitFailureModeDeny=false
+            - --mcpSessionEncryptionSeed=default-insecure-seed
+            - --mcpSessionEncryptionIterations=100000
+          livenessProbe:
+            grpc:
+              port: 1063
+            initialDelaySeconds: 5
+            periodSeconds: 2
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          readinessProbe:
+            grpc:
+              port: 1063
+            initialDelaySeconds: 5
+            periodSeconds: 2
+          resources:
+            {}
+          volumeMounts:
+            - mountPath: /certs
+              name: certs
+              readOnly: true
+      volumes:
+        - name: certs
+          secret:
+            secretName: self-signed-cert-for-mutating-webhook
+---
+# Source: ai-gateway-helm/templates/envoy_gateway_cluster_role_for_inference_pool.yaml
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# This file contains the RBAC roles and role bindings for the Envoy Gateway
+# so that it can read the InferencePool resources that are set in the HTTPRoutes
+# generated by the AI Gateway.
+---
+# Source: ai-gateway-helm/templates/poddisruptionbudget.yaml
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+---
+# Source: ai-gateway-helm/templates/admission_webhook.yaml
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: envoy-ai-gateway-gateway-pod-mutator.default
+webhooks:
+  - name:  ai-gateway-controller.default.svc.cluster.local
+    clientConfig:
+      service:
+        name:  ai-gateway-controller
+        namespace: default
+        port: 9443
+        path: /mutate
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+    objectSelector:
+      matchLabels:
+        app.kubernetes.io/managed-by: envoy-gateway
+    sideEffects: None
+    admissionReviewVersions: ["v1"]
+    timeoutSeconds: 10
+    failurePolicy: Fail

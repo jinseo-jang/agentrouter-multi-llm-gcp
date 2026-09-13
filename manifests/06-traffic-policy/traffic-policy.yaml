@@ -1,0 +1,124 @@
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: claude-sonnet-token-ratelimit
+  namespace: routing
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: envoy-ai-gateway
+  rateLimit:
+    type: Global
+    global:
+      rules:
+        - clientSelectors:
+            - headers:
+                - name: x-tenant-id
+                  type: Distinct
+                - name: x-ai-eg-model
+                  type: Exact
+                  value: sonnet-5
+          limit:
+            requests: 500000
+            unit: Minute
+          cost:
+            request:
+              from: Number
+              number: 0
+            response:
+              from: Metadata
+              metadata:
+                namespace: io.envoy.ai_gateway
+                key: llm_total_token
+        - clientSelectors:
+            - headers:
+                - name: x-tenant-id
+                  type: Distinct
+                - name: x-ai-eg-model
+                  type: Exact
+                  value: claude-sonnet-5
+          limit:
+            requests: 500000
+            unit: Minute
+          cost:
+            request:
+              from: Number
+              number: 0
+            response:
+              from: Metadata
+              metadata:
+                namespace: io.envoy.ai_gateway
+                key: llm_total_token
+---
+apiVersion: aigateway.envoyproxy.io/v1alpha1
+kind: QuotaPolicy
+metadata:
+  name: claude-sonnet-quota-policy
+  namespace: routing
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: vertex-ai-claude-backend
+  serviceQuota:
+    quota:
+      limit: 10000
+      duration: "1h"
+  perModelQuotas:
+    - modelName: "claude-sonnet-5"
+      quota:
+        mode: Shared
+        costExpression: "input_tokens + output_tokens"
+        defaultBucket:
+          limit: 100000
+          duration: "1m"
+        bucketRules:
+          - clientSelectors:
+              - headers:
+                  - name: x-tenant-id
+                    type: Exact
+                    value: "platform"
+            quota:
+              limit: 500000
+              duration: "1m"
+---
+apiVersion: aigateway.envoyproxy.io/v1alpha1
+kind: QuotaPolicy
+metadata:
+  name: partner-quota
+  namespace: routing
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: partner-vllm-backend
+  serviceQuota:
+    quota:
+      limit: 5000
+      duration: "1h"
+  perModelQuotas:
+    - modelName: gemma-rr
+      quota:
+        mode: Shared
+        costExpression: "input_tokens + output_tokens"
+        defaultBucket:
+          limit: 1
+          duration: "1m"
+        bucketRules:
+          - clientSelectors:
+              - headers:
+                  - name: x-tenant-id
+                    type: Exact
+                    value: acme-corp
+            quota:
+              limit: 60
+              duration: "1m"
+          - clientSelectors:
+              - headers:
+                  - name: x-tenant-id
+                    type: Exact
+                    value: globex
+            quota:
+              limit: 500
+              duration: "1m"

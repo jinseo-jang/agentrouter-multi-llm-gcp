@@ -1,0 +1,15 @@
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: GatewayConfig
+metadata:
+  name: envoy-ai-gateway-config
+  namespace: routing
+spec:
+  extProc:
+    kubernetes:
+      env:
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://phoenix-service.phoenix.svc.cluster.local:6006"
+        - name: OTEL_METRICS_EXPORTER
+          value: "none"
+        - name: OTEL_SERVICE_NAME
+          value: "envoy-ai-gateway"

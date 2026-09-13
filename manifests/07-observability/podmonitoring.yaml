@@ -1,0 +1,15 @@
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: vllm-server
+  namespace: vllm
+  labels:
+    app.kubernetes.io/name: vllm-server
+spec:
+  selector:
+    matchLabels:
+      app: vllm-server
+  endpoints:
+  - port: 8000
+    path: /metrics
+    interval: 15s
