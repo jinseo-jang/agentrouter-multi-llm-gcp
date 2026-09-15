@@ -220,7 +220,7 @@ sequenceDiagram
     Partner->>Envoy: POST /v1/chat/completions<br/>Host: partner.agent-router.internal<br/>X-API-Key: pk-partner-htcsor-...<br/>{"model": "gemma-rr", "messages": [...]}
 
     Note over Envoy,KeyAuth: [Step 2: Partner Security Evaluation (Route Override)]
-    Note over KeyAuth: Bypasses parent Gateway JWT filter; evaluates API key
+    Note over KeyAuth: Bypasses parent Gateway JWT filter and evaluates API key
     Envoy->>KeyAuth: Look up Secret/partner-api-keys mapping table
     alt Invalid or missing key
         KeyAuth-->>Partner: Blocked immediately with HTTP 401 Unauthorized
