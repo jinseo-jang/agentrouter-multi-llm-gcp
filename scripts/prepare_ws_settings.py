@@ -20,6 +20,9 @@ env["ANTHROPIC_AUTH_TOKEN"] = token
 env["ANTHROPIC_MODEL"] = "claude-sonnet-5"
 data["model"] = "claude-sonnet-5"
 
+# Suppress unsupported experimental beta headers (e.g. advisor-tool-2026-03-01)
+env["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
+
 with open(settings_path + ".new", "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
 print("Updated settings successfully written to " + settings_path + ".new")

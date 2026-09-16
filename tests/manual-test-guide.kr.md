@@ -94,6 +94,7 @@ export GCP_PROJECT="${GCP_PROJECT:-<YOUR_PROJECT_ID>}"
    - `"apiKeyHelper": "/home/user/bin/gcip-token.sh alice platform"`
    - `"ANTHROPIC_MODEL": "claude-sonnet-5"`
    - `"model": "claude-sonnet-5"`
+   - `"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"` (최신 Claude Code의 미지원 베타 헤더 거부 방지)
    - `CLAUDE_CODE_USE_VERTEX` 환경 변수가 없어야 합니다 (있으면 게이트웨이 주소를 무시합니다).
    - `env.ANTHROPIC_AUTH_TOKEN`이 없어야 합니다 (있으면 `apiKeyHelper`가 무시되고 만료 시 401 오류가 발생합니다).
 
@@ -460,3 +461,7 @@ python3 /tmp/make_payload.py
    kubectl rollout restart deployment/envoy-gateway -n envoy-gateway-system
    kubectl rollout status deployment/envoy-gateway -n envoy-gateway-system --timeout=180s
    ```
+
+4. **Claude Code 호출 시 `400 Unexpected value(s) advisor-tool-2026-03-01 for the anthropic-beta header` 오류 발생 시**:
+   - 최신 버전 Claude Code가 주입하는 실험적 베타 헤더를 업스트림 엔드포인트가 해석하지 못해 발생하는 현상입니다.
+   - `~/.claude/settings.json`의 `env` 블록에 `"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"`을 등록하거나 터미널에서 `export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`을 선언하여 미지원 헤더 주입을 비활성화합니다.
