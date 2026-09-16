@@ -60,6 +60,12 @@ apply-manifests: setup-secrets
 	kubectl apply -k manifests/05-routing
 	kubectl apply -k manifests/06-traffic-policy
 	kubectl apply -k manifests/07-observability
+	@echo "Ensuring Cloud Monitoring vLLM Dashboard exists..."
+	@if ! gcloud monitoring dashboards list --project="$(GCP_PROJECT)" --filter="displayName:'vLLM Model Server Monitoring'" --format="value(name)" 2>/dev/null | grep -q .; then \
+		gcloud monitoring dashboards create --project="$(GCP_PROJECT)" --config-from-file=manifests/07-observability/dashboards/vllm-dashboard.json; \
+	else \
+		echo "vLLM Model Server Monitoring dashboard already exists."; \
+	fi
 
 benchmark:
 	kubectl delete job e2e-benchmark-job -n default --ignore-not-found

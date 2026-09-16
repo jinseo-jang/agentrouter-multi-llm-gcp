@@ -154,8 +154,14 @@ kubectl apply -k manifests/05-routing
 # 6. Redis and token quota/rate-limit policies
 kubectl apply -k manifests/06-traffic-policy
 
-# 7. Arize Phoenix and PodMonitoring
+# 7. Arize Phoenix, PodMonitoring, and Cloud Monitoring Dashboard
 kubectl apply -k manifests/07-observability
+
+# Create custom vLLM Cloud Monitoring dashboard (idempotent)
+if ! gcloud monitoring dashboards list --project="$GCP_PROJECT" --filter="displayName:'vLLM Model Server Monitoring'" --format="value(name)" | grep -q .; then
+  gcloud monitoring dashboards create --project="$GCP_PROJECT" \
+    --config-from-file=manifests/07-observability/dashboards/vllm-dashboard.json
+fi
 ```
 
 ### 4.5 Verify Deployment Status
@@ -384,15 +390,64 @@ done
 
 ---
 
-### 5.7 Scenario 6: Full-Stack Enterprise Observability
+### 5.7 Scenario 6: Full-Stack Enterprise Observability (Cloud Monitoring & Arize Phoenix)
 
-Inspect distributed traces in Arize Phoenix:
+Verify end-to-end observability across infrastructure GPU metrics (`Google Cloud Monitoring`) and application-level LLM distributed traces (`Arize Phoenix`).
+
+#### Part 1: Google Cloud Monitoring vLLM Dashboard
+
+Google Cloud Managed Service for Prometheus (GMP) scrapes vLLM GPU metrics every 15 seconds via `PodMonitoring` and visualizes them in a custom Cloud Monitoring dashboard.
+
 ```bash
+# 1. Verify PodMonitoring status (Status: True)
+kubectl get podmonitoring -n vllm vllm-server \
+  -o jsonpath='{.status.conditions[0].type}: {.status.conditions[0].status}{"\n"}'
+
+# 2. Retrieve custom dashboard URL
+DASH_ID=$(gcloud monitoring dashboards list --project="$GCP_PROJECT" \
+  --filter="displayName:'vLLM Model Server Monitoring'" --format="value(name)" | awk -F/ '{print $NF}')
+echo "Dashboard URL: https://console.cloud.google.com/monitoring/dashboards/builder/${DASH_ID}?project=${GCP_PROJECT}"
+```
+
+1. Open the printed **Dashboard URL** in Google Cloud Console to view `vLLM Model Server Monitoring`.
+2. Use the 4 top filter dropdowns (`cluster`, `namespace`, `pod`, `model_name`) to slice metrics:
+   - Select a specific pod (`vllm-server-*`) in the `pod` filter to isolate a single GPU instance.
+   - Keep `pod` and `model_name` set to `All` to overlay all GPU pods on the same chart and compare load balance and cache hit skew.
+3. Inspect the 6 core dashboard charts:
+   - **KV Cache Usage %**: VRAM KV cache block utilization across L4 GPUs
+   - **Prefix Cache Hit Rate %**: Prefix cache hit rate driven by EPP routing (observe the spike on the specific pod hit in Section 5.6)
+   - **Running & Waiting Requests**: Active concurrent requests and queue depth (`Waiting`)
+   - **TTFT (Time to First Token) Latency**: P50 and P95 TTFT latency trends
+   - **Generation Token & Request Throughput**: Tokens generated per second (`Tokens/s`) and completed requests per second (`Req/s`)
+
+---
+
+#### Part 2: Arize Phoenix Distributed Tracing (OpenInference Spans) Audit
+
+Audit the full prompt/response payloads, token consumption, and latency breakdown exported by Envoy AI Gateway (`ai-gateway-extproc`) using the OpenInference standard.
+
+```bash
+# 1. Port-forward Arize Phoenix web UI
 kubectl port-forward -n phoenix svc/phoenix-service 6006:6006
 ```
-1. Open `http://localhost:6006` in your browser.
-2. Navigate to `Traces` to inspect the OpenInference spans captured from your requests.
-3. Verify `gen_ai.request.model`, `llm_total_token`, `tenant_id`, and latency breakdown.
+- **Local PC**: Open `http://localhost:6006` in your browser.
+- **Cloud Shell / Cloud Workstation**: Click the **Web Preview** icon and change the port to `6006`.
+
+1. On the Phoenix landing page, click into the **`default` project**.
+2. Select the **`Traces`** tab at the top to view chronological `ChatCompletion` traces across all models invoked in Scenarios 1–5 (`gemini-2.5-flash`, `claude-sonnet-5`, `gemma-rr`, `gemma-epp`).
+3. Click any individual `ChatCompletion` span row to open the right-hand detail panel and audit 4 enterprise attributes:
+   - **Model & Provider Identification (`Attributes` tab)**: Verify `llm.model_name` (`gemini-2.5-flash`, `claude-sonnet-5`, `gemma-epp`) and `llm.system` (`openai`, `anthropic`).
+   - **Input & Output Payload Audit (`Input / Output` tab)**: Inspect `llm.input_messages` (exact user prompt) and `llm.output_messages` (assistant response text) captured for compliance and quality evaluation.
+   - **Token Billing Ledger (`Attributes` tab)**: Verify exact token counts in `llm.token_count.prompt`, `llm.token_count.completion`, and `llm.token_count.total`.
+   - **End-to-End Latency Breakdown (`Latency` column)**: Compare total `Duration` between 1st Cold requests and 2nd Warm cache-hit requests.
+
+```bash
+# [Optional] Verify the 5 most recent spans directly via Phoenix REST API from CLI
+kubectl exec -n routing deploy/echo-server -- wget -qO- \
+  "http://phoenix-service.phoenix.svc.cluster.local:6006/v1/projects/default/spans?limit=5" \
+  | jq '{total_fetched: (.data | length), spans: [.data[] | {name: .name, model: .attributes."llm.model_name", prompt_tokens: .attributes."llm.token_count.prompt", completion_tokens: .attributes."llm.token_count.completion", total_tokens: .attributes."llm.token_count.total", trace_id: .context.trace_id}]}'
+```
+- **Expected Result**: Returns a JSON array displaying `trace_id`, `model`, `prompt_tokens`, `completion_tokens`, and `total_tokens` for your recent invocations.
 
 ---
 

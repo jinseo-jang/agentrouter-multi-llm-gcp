@@ -156,8 +156,14 @@ kubectl apply -k manifests/05-routing
 # 6. Redis 및 트래픽/쿼터 정책
 kubectl apply -k manifests/06-traffic-policy
 
-# 7. Arize Phoenix 및 모니터링
+# 7. Arize Phoenix 및 Cloud Monitoring 대시보드 배포
 kubectl apply -k manifests/07-observability
+
+# Cloud Monitoring vLLM 커스텀 대시보드 생성 (최초 1회)
+if ! gcloud monitoring dashboards list --project="$GCP_PROJECT" --filter="displayName:'vLLM Model Server Monitoring'" --format="value(name)" | grep -q .; then
+  gcloud monitoring dashboards create --project="$GCP_PROJECT" \
+    --config-from-file=manifests/07-observability/dashboards/vllm-dashboard.json
+fi
 ```
 
 ### 4.5 배포 상태 점검
@@ -388,23 +394,65 @@ done
 
 ---
 
-### 5.7 시나리오 6: 엔터프라이즈 풀스택 관측성 실습
+### 5.7 시나리오 6: 엔터프라이즈 풀스택 관측성 실습 (Cloud Monitoring & Arize Phoenix)
 
-게이트웨이에서 발생한 분산 트레이스와 GPU 메트릭을 분석합니다.
+인프라 계층의 GPU 메트릭(`Google Cloud Monitoring`)과 애플리케이션 계층의 LLM 입출력 분산 트레이스(`Arize Phoenix`)를 연계하여 엔드투엔드 관측성을 검증합니다.
+
+#### Part 1: Google Cloud Monitoring vLLM 대시보드 관측
+
+GKE Managed Service for Prometheus(GMP)가 15초 주기로 수집한 vLLM GPU 서빙 메트릭을 Cloud Monitoring 커스텀 대시보드에서 실시간으로 분석합니다.
 
 ```bash
-# Arize Phoenix 포트포워딩 실행
-kubectl port-forward -n phoenix svc/phoenix-service 6006:6006
+# 1. PodMonitoring 수집 상태 확인 (Status: True 확인)
+kubectl get podmonitoring -n vllm vllm-server \
+  -o jsonpath='{.status.conditions[0].type}: {.status.conditions[0].status}{"\n"}'
+
+# 2. 생성된 vLLM 커스텀 대시보드 리소스 ID 및 접속 URL 확인
+DASH_ID=$(gcloud monitoring dashboards list --project="$GCP_PROJECT" \
+  --filter="displayName:'vLLM Model Server Monitoring'" --format="value(name)" | awk -F/ '{print $NF}')
+echo "대시보드 접속 URL: https://console.cloud.google.com/monitoring/dashboards/builder/${DASH_ID}?project=${GCP_PROJECT}"
 ```
-1. 웹 브라우저에서 `http://localhost:6006`에 접속합니다.
-2. 상단 네비게이션에서 `Traces` 메뉴를 클릭하고 방금 실행한 요청들을 확인합니다.
-3. 개별 트레이스를 선택하여 세부 Span Attributes를 분석합니다.
-   - `gen_ai.request.model`: 요청된 모델 식별자
-   - `llm_total_token`: 소비된 총 토큰 수
-   - `tenant_id`: 게이트웨이가 주입한 테넌트 식별자 (`platform`, `partner-htcsor` 등)
-   - 세부 레이턴시 구간 (Gateway 처리 시간 vs 백엔드 추론 시간)
+
+1. 출력된 **대시보드 접속 URL**을 클릭하여 Google Cloud Console의 `vLLM Model Server Monitoring` 화면으로 이동합니다.
+2. 상단 필터 바의 드롭다운 4종(`cluster`, `namespace`, `pod`, `model_name`)을 조합해 관측 범위를 조절합니다.
+   - `pod` 필터에서 특정 파드(`vllm-server-*`)를 선택하면 해당 GPU 인스턴스 단독 지표를 분리 관측할 수 있습니다.
+   - `pod`와 `model_name`을 `All`로 두면 모든 GPU 파드의 시계열이 한 차트에 겹쳐 표시되어 파드 간 부하 분산과 캐시 적중 편차를 한눈에 비교할 수 있습니다.
+3. 대시보드 내 6대 핵심 위젯을 확인합니다.
+   - **KV Cache Usage %**: L4 GPU VRAM 내 KV 캐시 블록 점유율
+   - **Prefix Cache Hit Rate %**: EPP가 유도한 프롬프트 접두사 캐시 적중률 (5.6절 실습 직후 특정 파드 적중률 상승 확인)
+   - **Running & Waiting Requests**: 현재 GPU에서 동시 처리 중인 추론 요청 수와 큐 대기열(Waiting) 발생 여부
+   - **TTFT (Time to First Token) Latency**: P50 및 P95 첫 토큰 응답 지연시간 추이
+   - **Generation Token & Request Throughput**: 초당 생성 토큰 수(Tokens/s) 및 초당 처리 완료 요청 수(Req/s)
 
 ---
+
+#### Part 2: Arize Phoenix 분산 트레이스(OpenInference Spans) 감사
+
+게이트웨이(`ai-gateway-extproc`)가 OpenInference 표준으로 전송한 LLM 입출력 프롬프트 원문과 토큰 사용량, 구간별 소요 시간을 Arize Phoenix UI 및 API로 감사(Audit)합니다.
+
+```bash
+# 1. Arize Phoenix 웹 UI 포트포워딩 실행
+kubectl port-forward -n phoenix svc/phoenix-service 6006:6006
+```
+- **로컬 PC 환경**: 웹 브라우저에서 `http://localhost:6006`에 접속합니다.
+- **Cloud Shell / Cloud Workstation 환경**: 상단 **웹 미리보기(Web Preview)** 아이콘을 클릭하고 포트를 `6006`으로 변경하여 접속합니다.
+
+1. Phoenix 첫 화면의 Projects 목록에서 **`default` 프로젝트**를 클릭해 진입합니다.
+2. 상단 탭에서 **`Traces`**를 선택하면 앞서 시나리오 1 ~ 5에서 호출한 모든 모델(`gemini-2.5-flash`, `claude-sonnet-5`, `gemma-rr`, `gemma-epp`)의 `ChatCompletion` 트레이스 목록이 시간순으로 표시됩니다.
+3. 개별 `ChatCompletion` Span 행을 클릭해 우측 상세 패널에서 다음 4가지 엔터프라이즈 감사 항목을 확인합니다.
+   - **모델 및 시스템 식별 (`Attributes` 탭)**: `llm.model_name`(`gemini-2.5-flash`, `claude-sonnet-5`, `gemma-epp` 등) 및 `llm.system`(`openai`, `anthropic`) 기록 확인
+   - **입출력 프롬프트 원문 감사 (`Input / Output` 탭)**: `llm.input_messages`(사용자가 전송한 실제 프롬프트)와 `llm.output_messages`(모델이 생성한 응답 원문)가 누락 없이 기록되어 보안 감사 및 품질 평가에 활용 가능함을 확인
+   - **토큰 과금 원장 대조 (`Attributes` 탭)**: `llm.token_count.prompt`(입력 토큰), `llm.token_count.completion`(출력 토큰), `llm.token_count.total`(총 소비 토큰) 수치 확인
+   - **엔드투엔드 레이턴시 비교 (`Latency` 컬럼)**: 게이트웨이 진입부터 백엔드 응답 완료까지 걸린 총 소요 시간(`Duration`)을 비교해 1차 Cold 요청 대비 2차 Warm 캐시 적중 요청의 지연시간 단축 효과 확인
+
+```bash
+# [선택] 웹 브라우저 없이 터미널에서 즉시 최근 적재된 Span 5건 검증 (CLI 원라이너)
+kubectl exec -n routing deploy/echo-server -- wget -qO- \
+  "http://phoenix-service.phoenix.svc.cluster.local:6006/v1/projects/default/spans?limit=5" \
+  | jq '{total_fetched: (.data | length), spans: [.data[] | {name: .name, model: .attributes."llm.model_name", prompt_tokens: .attributes."llm.token_count.prompt", completion_tokens: .attributes."llm.token_count.completion", total_tokens: .attributes."llm.token_count.total", trace_id: .context.trace_id}]}'
+```
+- **기대 결과**: 최근 호출한 모델들의 `trace_id`, `model`, `prompt_tokens`, `completion_tokens`, `total_tokens`가 JSON 배열로 즉시 출력됩니다.
+
 
 ## 6. 트러블슈팅 FAQ
 
