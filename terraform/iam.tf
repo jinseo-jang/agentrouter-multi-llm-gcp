@@ -21,7 +21,9 @@ resource "google_service_account_iam_binding" "workload_identity_binding" {
   role               = "roles/iam.workloadIdentityUser"
 
   members = [
+    "serviceAccount:${var.project_id}.svc.id.goog[default/e2e-benchmark-sa]",
     "serviceAccount:${var.project_id}.svc.id.goog[default/envoy-ai-ksa]",
+    "serviceAccount:${var.project_id}.svc.id.goog[envoy-gateway-system/envoy-ai-ksa]",
     "serviceAccount:${var.project_id}.svc.id.goog[vllm/envoy-ai-ksa]",
     "serviceAccount:${var.project_id}.svc.id.goog[phoenix/phoenix-ksa]",
     "serviceAccount:${var.project_id}.svc.id.goog[routing/envoy-ai-ksa]",

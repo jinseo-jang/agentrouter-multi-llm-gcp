@@ -1,5 +1,5 @@
 resource "google_sql_database_instance" "main" {
-  name             = "envoy-ai-gw-db"
+  name             = "envoy-ai-gw-db-${random_id.bucket_prefix.hex}"
   database_version = "POSTGRES_16"
   region           = var.region
   
@@ -11,12 +11,14 @@ resource "google_sql_database_instance" "main" {
 }
 
 resource "google_sql_database" "phoenix_db" {
-  name     = "phoenix"
-  instance = google_sql_database_instance.main.name
+  name            = "phoenix"
+  instance        = google_sql_database_instance.main.name
+  deletion_policy = "ABANDON"
 }
 
 resource "google_sql_user" "phoenix_user" {
-  name     = "phoenix"
-  instance = google_sql_database_instance.main.name
-  password = "phoenix_password"
+  name            = "phoenix"
+  instance        = google_sql_database_instance.main.name
+  password        = "phoenix_password"
+  deletion_policy = "ABANDON"
 }

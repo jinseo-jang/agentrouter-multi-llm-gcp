@@ -3,5 +3,7 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - serviceaccount.yaml
+  - hf-secret.yaml
+  - hf-loader-job.yaml
   - vllm-deployment.yaml
   - vllm-service.yaml

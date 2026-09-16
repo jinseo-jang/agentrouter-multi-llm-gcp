@@ -112,26 +112,49 @@ GKE Standard 환경에서 NVIDIA L4 GPU 2대, vLLM v0.29.0(`google/gemma-2-2b-it
 - Terraform 1.5 이상
 - Kubernetes CLI (`kubectl`)
 - `jq`, `curl`
-- **Hugging Face Access Token**: `google/gemma-2-2b-it` 모델 라이선스 동의 완료된 Read 권한 토큰 필수
+- **Hugging Face Access Token**: `google/gemma-2-2b-it` 모델 라이선스 동의가 완료된 Read 권한 토큰 필수
 
 ### 7.2 한 번에 배포하기
 ```bash
-# 1. Hugging Face 토큰 환경변수 등록
+# 1. 프로젝트 ID 및 Hugging Face 토큰 환경변수 등록
+export GCP_PROJECT="<YOUR_PROJECT_ID>"
+export GCP_REGION="asia-southeast1"
 export HF_TOKEN="hf_your_token_here"
 
-# 2. 인프라 프로비저닝 및 매니페스트 배포
+# 2. 필수 GCP API 일괄 활성화 (신규 프로젝트인 경우)
+gcloud services enable compute.googleapis.com container.googleapis.com \
+  sqladmin.googleapis.com storage.googleapis.com iam.googleapis.com \
+  iamcredentials.googleapis.com aiplatform.googleapis.com \
+  identitytoolkit.googleapis.com firebase.googleapis.com --project=$GCP_PROJECT
+
+# 3. 인프라 프로비저닝 및 매니페스트 원스톱 배포
 make deploy
 
-# 3. 3대 라우팅 비교 벤치마크 실행
+# 4. 3대 라우팅 비교 벤치마크 실행
 make benchmark
 
-# 4. 인프라 정리 및 비용 차단
+# 5. 인프라 정리 및 비용 차단 (LoadBalancer 선삭제 후 Terraform Destroy)
 make clean
 ```
 
 ### 7.3 단계별 매니페스트 수동 배포
 매니페스트는 의존성 순서에 따라 번호별 폴더로 정렬되어 있습니다.
 ```bash
+# 0. 환경변수 치환 및 백엔드 인증 시크릿 생성
+make update-manifests
+make setup-secrets
+
+# 1. 기본 CRD 및 컨트롤러 설치
+kubectl apply --server-side -f manifests/00-setup/agent-router-crds.yaml
+kubectl apply -f manifests/00-setup/envoy-gateway-controller.yaml
+kubectl apply -f manifests/00-setup/gie-install.yaml
+kubectl apply -f manifests/00-setup/agent-router.yaml
+kubectl apply -f manifests/00-setup/envoy-gateway-config.yaml
+kubectl apply -f manifests/00-setup/envoy-ai-gateway-ratelimit-svc.yaml
+kubectl rollout status deployment/envoy-gateway -n envoy-gateway-system --timeout=180s
+kubectl rollout status deployment/ai-gateway-controller -n default --timeout=180s
+
+# 2. 게이트웨이 및 워크로드 순차 배포
 kubectl apply -k manifests/01-gateway
 kubectl apply -k manifests/02-security
 kubectl apply -k manifests/03-vllm

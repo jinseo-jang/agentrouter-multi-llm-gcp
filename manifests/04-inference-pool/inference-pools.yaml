@@ -31,3 +31,22 @@ spec:
     name: llm-d-router-noprefix
     port:
       number: 9000
+---
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-routing-to-vllm
+  namespace: vllm
+spec:
+  from:
+    - group: aigateway.envoyproxy.io
+      kind: AIGatewayRoute
+      namespace: routing
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: routing
+  to:
+    - group: inference.networking.k8s.io
+      kind: InferencePool
+    - group: ""
+      kind: Service

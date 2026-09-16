@@ -1,7 +1,7 @@
 resource "google_container_cluster" "main" {
-  name     = "envoy-ai-gw-cluster"
-  location = var.region
-  node_locations = ["asia-southeast1-a"]
+  name           = "envoy-ai-gw-cluster"
+  location       = var.region
+  node_locations = ["${var.region}-a"]
 
   network    = google_compute_network.main.id
   subnetwork = google_compute_subnetwork.main.id

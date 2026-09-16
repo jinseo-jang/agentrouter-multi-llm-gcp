@@ -1,385 +1,432 @@
-# Customer Workshop Hands-on Guide: Multi-LLM Serving Architecture with Agentrouter
+# Agentrouter Multi-LLM Serving Customer Workshop Guide
 
 > **Languages:** [English](workshop-guide.md) | [한국어](workshop-guide.kr.md)
 
-This guide provides an end-to-end hands-on workshop curriculum for deploying and verifying an enterprise multi-LLM serving platform combining [Agentrouter(formerly Envoy AI Gateway)](https://github.com/theagentrouter/agent-router), Kubernetes Gateway API Inference Extension (GIE), llm-d-router (EPP), vLLM, Google Cloud Vertex AI, and [Arize Phoenix](https://github.com/Arize-ai/phoenix) on Google Kubernetes Engine (GKE).
+This guide walks through deploying and verifying an enterprise AI serving platform on Google Kubernetes Engine (GKE) using [Agentrouter (formerly Envoy AI Gateway)](https://github.com/theagentrouter/agent-router), Kubernetes Gateway API Inference Extension (GIE), llm-d-router (EPP), vLLM, Vertex AI, and [Arize Phoenix](https://github.com/Arize-ai/phoenix).
 
-Beyond simple deployment checks, this workshop demonstrates the core value of an enterprise AI gateway: corporate security authentication, partner quota isolation, prefix cache acceleration, header anti-spoofing, and full-stack distributed tracing.
+Participants will experience enterprise AI gateway capabilities firsthand, including multi-tier authentication, partner token budget isolation, KV cache prefix acceleration, header spoofing defense, and full-stack distributed tracing.
 
 ---
 
 ## 1. Workshop Overview & Architecture
 
-Participants construct a production-ready enterprise AI serving infrastructure supporting employee workstations, internal microservices, and external partners from a single gateway endpoint:
+Participants build an enterprise AI serving infrastructure from a single gateway endpoint supporting internal developer workstations, internal microservices, and external partner integrations.
 
-- **Infrastructure Layer**: GKE Standard cluster, 2x NVIDIA L4 GPU Spot node pools (`g2-standard-8`), Cloud SQL PostgreSQL 16 instance, and Cloud Storage bucket.
-- **Inference Backend Layer**: Public cloud managed models (Google Cloud Vertex AI Gemini 2.5 Flash and Claude Sonnet 5) and self-hosted vLLM (Gemma 2B) models.
-- **Intelligent Routing & Cache Acceleration**: Kubernetes GIE `InferencePool` and `llm-d-router` (EPP) prefix-cache scorers delivering sub-second TTFT.
-- **Multi-Tier Security & Quota Isolation**: GCIP JWT, Google SA ID Token, and Partner API Key authentication with Redis-backed per-tenant token quotas.
-- **Full-Stack Observability**: Arize Phoenix and Google Cloud Monitoring collecting OTLP traces and prefix cache metrics.
+- **Infrastructure Layer**: Provisions a GKE Standard cluster with 2x NVIDIA L4 GPU Spot node pools (`g2-standard-8`), a Cloud SQL PostgreSQL 16 instance, and a Cloud Storage bucket.
+- **Inference Backend Layer**: Integrates Google Cloud Vertex AI (Gemini 2.5 Flash and Claude Sonnet 5) alongside self-hosted vLLM (Gemma 2B).
+- **Intelligent Routing & Cache Acceleration**: Applies Kubernetes GIE `InferencePool` and `llm-d-router` (EPP) prefix cache scoring to reduce GPU prefill latency.
+- **Multi-Tier Security & Authorization**: Enforces GCIP JWTs, Google SA ID tokens, and partner API keys with isolated token rate limits per tenant.
+- **Full-Stack Observability**: Collects OpenInference traces in Arize Phoenix and vLLM Prometheus metrics in Google Cloud Monitoring.
 
-For detailed architecture diagrams and request sequence workflows, refer to:
-- [Resource Hierarchy & Architecture Diagram](../design/gateway-architecture-diagram.md)
-- [End-to-End Request Flow Sequence Diagram](../design/architecture-request-flow.md)
+For detailed architecture and request sequence diagrams, see:
+- [Resource Structure & Layer Diagram](../design/gateway-architecture-diagram.md)
+- [End-to-End Request Sequence Flow](../design/architecture-request-flow.md)
 
 ---
 
-## 2. Prerequisites & Environment Setup
+## 2. Prerequisites & Environment Preparation
 
 ### 2.1 Required Local Tools
-Ensure the following CLI utilities are installed in your local shell or Cloud Shell:
+Ensure the following CLI tools are installed in your local shell or Cloud Shell:
 - Google Cloud SDK (`gcloud` CLI)
-- Terraform (v1.5+ recommended)
+- Terraform (v1.5 or higher recommended)
 - Kubernetes CLI (`kubectl`)
 - `jq`, `curl`
 
-### 2.2 Hugging Face Access Token Setup (Required)
-The self-hosted `google/gemma-2-2b-it` model is a gated repository. A valid Hugging Face account and license agreement are mandatory:
-1. Visit the [Hugging Face Gemma-2-2b-it page](https://huggingface.co/google/gemma-2-2b-it) and accept the terms of use.
-2. In your Hugging Face account, navigate to `Settings > Access Tokens` and generate a token with `Read` permissions.
+### 2.2 Hugging Face Access Token (Required)
+Downloading `google/gemma-2-2b-it` weights to Cloud Storage requires a Hugging Face account with accepted model license terms:
+1. Visit the [Hugging Face Gemma-2-2b-it page](https://huggingface.co/google/gemma-2-2b-it) and accept the license agreement.
+2. Generate a token with `Read` permissions under `Settings > Access Tokens`.
 
-### 2.3 GCP IAM Permissions
-Your deployment account must possess the following IAM roles in the target GCP project:
+### 2.3 GCP IAM Roles
+Your GCP account must hold the following IAM roles in the target project:
 - Kubernetes Engine Admin (`roles/container.admin`)
 - Compute Admin (`roles/compute.admin`)
 - Cloud SQL Admin (`roles/cloudsql.admin`)
 - Storage Admin (`roles/storage.admin`)
 - Service Account Admin & User (`roles/iam.serviceAccountAdmin`, `roles/iam.serviceAccountUser`)
+- Service Account Token Creator (`roles/iam.serviceAccountTokenCreator` - required for SA impersonation & JWT signing)
 - Vertex AI User (`roles/aiplatform.user`)
 
-### 2.4 NVIDIA L4 GPU Quota Verification
-Provisioning 2x NVIDIA L4 GPUs on Spot node pools requires a regional GPU quota of at least 2:
-
+### 2.4 Enable Required GCP APIs & Identity Platform (GCIP) Setup
+Enable all required Google Cloud APIs in your target project:
 ```bash
 export GCP_PROJECT="<YOUR_PROJECT_ID>"
 export GCP_REGION="asia-southeast1"
 
+gcloud services enable compute.googleapis.com container.googleapis.com \
+  sqladmin.googleapis.com storage.googleapis.com iam.googleapis.com \
+  iamcredentials.googleapis.com aiplatform.googleapis.com \
+  identitytoolkit.googleapis.com firebase.googleapis.com --project=$GCP_PROJECT
+```
+In addition, to run the employee JWT token script (`scripts/gcip-token.sh`), enable **Identity Platform (or Firebase Authentication)** in the Google Cloud Console for your project and register one Web App.
+
+### 2.5 Check NVIDIA L4 GPU Quota
+Provisioning 2 NVIDIA L4 GPUs requires at least 2 regional `NVIDIA_L4_GPUS` quota in your target region:
+```bash
 gcloud compute regions describe $GCP_REGION \
   --project=$GCP_PROJECT \
   --format="json" | jq -r '.quotas[] | select(.metric | contains("NVIDIA_L4_GPUS"))'
 ```
-Verify that the `limit` value is 2 or higher. If insufficient, request a quota increase via `IAM & Admin > Quotas` in the Google Cloud Console.
+Verify that `limit` is at least `2`. Request a quota increase under `IAM & Admin > Quotas` if needed.
 
 ---
 
-## 3. Infrastructure Provisioning (Terraform)
+## 3. Step 1: Terraform Infrastructure Provisioning
 
-### 3.1 Configure Terraform Variables
-Navigate to the `terraform/` directory and configure `terraform.tfvars`:
+Provision the VPC network, GKE cluster, L4 GPU Spot node pools, Cloud SQL PostgreSQL 16 instance, Cloud Storage bucket, and Workload Identity service accounts.
 
 ```bash
 cd terraform
-cat <<EOF > terraform.tfvars
-project_id = "<YOUR_PROJECT_ID>"
-region     = "asia-southeast1"
-zone       = "asia-southeast1-a"
-EOF
-```
 
-### 3.2 Initialize and Apply Infrastructure
-```bash
+# 1. Initialize Terraform
 terraform init
-terraform apply -auto-approve
-```
 
-Key resources provisioned by Terraform:
-- **GKE Standard Cluster**: Gateway API enabled (`--gateway-api=standard`), Workload Identity enabled, GCS FUSE CSI driver enabled.
-- **GPU Node Pool**: 2x `g2-standard-8` with 1x NVIDIA L4 GPU each (`spot = true`).
-- **Cloud SQL PostgreSQL 16**: Managed DB instance storing Arize Phoenix tracing spans.
-- **Cloud Storage Bucket**: Stores `gemma-2-2b-it` model weights.
-- **IAM & Workload Identity**: Service accounts with IAM bindings for Vertex AI, GCS, and Cloud SQL.
+# 2. Provision infrastructure (takes ~12-15 minutes)
+terraform apply -var="project_id=$GCP_PROJECT" -var="region=$GCP_REGION" -auto-approve
 
-### 3.3 Connect `kubectl` to the GKE Cluster
-```bash
+# 3. Fetch GKE cluster credentials
 gcloud container clusters get-credentials envoy-ai-gw-cluster \
-  --region=asia-southeast1-a \
+  --region=$GCP_REGION \
   --project=$GCP_PROJECT
 
-# Verify GPU nodes are Ready
-kubectl get nodes -l cloud.google.com/gke-accelerator=nvidia-l4
+cd ..
 ```
 
 ---
 
-## 4. Deploying Kubernetes Manifests
+## 4. Step 2: Sequential Kubernetes Deployment
 
-Manifests are organized into numbered directories following dependency requirements.
+Manifests are organized into numbered directories by dependency order.
 
-### 4.1 Step 0: CRD and Core Controller Setup
-Install Agent Router CRDs and Kubernetes Gateway API Inference Extension CRDs:
+### 4.1 Substitute Manifest Placeholders & Hugging Face Token
+Export your Hugging Face token and substitute all Terraform output placeholders across the manifests:
 ```bash
-kubectl apply -f manifests/00-setup/agent-router-crds.yaml
+export HF_TOKEN="hf_your_token_here"
+
+# Automatically substitute Terraform outputs and HF_TOKEN
+make update-manifests
+```
+
+### 4.2 Create Secret for Vertex AI Backend Delegation
+Create the `vertex-ai-sa-key` secret referenced by `BackendSecurityPolicy` so the gateway can authenticate to Google Cloud Vertex AI on behalf of clients:
+```bash
+make setup-secrets
+```
+*(This creates the `routing` namespace, generates a JSON key for `envoy-ai-workload-sa`, and stores it in K8s Secret `vertex-ai-sa-key`.)*
+
+### 4.3 Install Base CRDs & Core Controllers
+Because the Envoy Gateway and AI Gateway CRDs are large, apply them with `--server-side`. Then deploy the Envoy Gateway controller, GIE controller, and Agent Router controller, restart Envoy Gateway to reload its custom config, and wait for them to become ready:
+```bash
+kubectl apply --server-side -f manifests/00-setup/envoy-gateway-crds.yaml
+kubectl apply --server-side -f manifests/00-setup/agent-router-crds.yaml
+kubectl apply -f manifests/00-setup/envoy-gateway-controller.yaml
 kubectl apply -f manifests/00-setup/gie-install.yaml
+kubectl apply -f manifests/00-setup/agent-router.yaml
+kubectl apply -f manifests/00-setup/envoy-gateway-config.yaml
+kubectl apply -f manifests/00-setup/envoy-ai-gateway-ratelimit-svc.yaml
+
+# Restart controller to load custom config and wait for readiness
+kubectl rollout restart deployment/envoy-gateway -n envoy-gateway-system
+kubectl rollout status deployment/envoy-gateway -n envoy-gateway-system --timeout=180s
+kubectl rollout status deployment/ai-gateway-controller -n default --timeout=180s
 ```
 
-### 4.2 Step 1 & 2: Gateway, Security Policies, and Hugging Face Secret
-Inject your Hugging Face Access Token into the cluster before deploying vLLM:
+### 4.4 Deploy Manifests 01 through 07
 ```bash
-export HF_TOKEN="hf_your_actual_token_here"
-
-# Create namespace and HF token secret
-kubectl create namespace vllm --dry-run=client -o yaml | kubectl apply -f -
-kubectl create secret generic hf-secret \
-  --namespace=vllm \
-  --from-literal=token=$HF_TOKEN \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-# Apply Gateway and Security manifests
+# 1. Gateway and Envoy proxy configuration
 kubectl apply -k manifests/01-gateway
+
+# 2. Global security policy and partner key issuer
 kubectl apply -k manifests/02-security
-```
 
-Obtain the external LoadBalancer IP allocated to the Gateway:
-```bash
-export GW_IP=$(kubectl get gateway envoy-ai-gateway -n routing -o jsonpath='{.status.addresses[0].value}')
-echo "Gateway External IP: $GW_IP"
-export GW="http://${GW_IP}:8080"
-```
-
-### 4.3 Step 3: Model Storage & vLLM GPU Serving Deployment
-```bash
+# 3. vLLM GPU serving engine (includes model weight loader job)
 kubectl apply -k manifests/03-vllm
+kubectl wait --for=condition=complete job/hf-weight-loader -n vllm --timeout=600s
+kubectl rollout restart deployment/vllm-server -n vllm
 
-# Monitor vLLM pod initialization (downloads weights via GCS FUSE)
-kubectl get pods -n vllm -w
-```
-Wait until both `vllm-server` pods transition to `Running (1/1)`.
-
-### 4.4 Step 4 ~ 7: Inference Pools, Routing, Traffic Policies, Observability
-```bash
+# 4. GIE InferencePool and llm-d-router EPP (includes cross-namespace ReferenceGrant)
 kubectl apply -k manifests/04-inference-pool
+
+# 5. Intelligent model routing and echo test server
 kubectl apply -k manifests/05-routing
+
+# 6. Redis and token quota/rate-limit policies
 kubectl apply -k manifests/06-traffic-policy
+
+# 7. Arize Phoenix and PodMonitoring
 kubectl apply -k manifests/07-observability
 ```
 
+### 4.5 Verify Deployment Status
+Wait until all pods reach `Running` and `Ready` status (`hf-weight-loader` downloads model weights to GCS before `vllm-server` initializes, which takes ~5-8 minutes):
+```bash
+kubectl get pods -A
+```
+Confirm that `envoy-routing-*`, `vllm-server-*`, `llm-d-router-*`, and `phoenix-*` pods are `Running` and `Ready`.
+
 ---
 
-## 5. Hands-on Verification Scenarios
+## 5. Step 3: Hands-On Verification Scenarios
 
-Export test environment variables before executing tests:
+Export the Gateway external IP address:
 ```bash
-export GW="http://${GW_IP}:8080"
+export GW="http://$(kubectl get gateway envoy-ai-gateway -n routing -o jsonpath='{.status.addresses[0].value}'):8080"
 export PARTNER_HOST="partner.agent-router.internal"
+echo "Gateway Endpoint: $GW"
 ```
 
 ---
 
-### Scenario 1: Unified Endpoint Multi-Model Routing
-
-Send inference requests across self-hosted and cloud models via the single gateway URL:
-
-#### 1.1 Google Cloud Vertex AI Gemini 2.5 Flash
+### 5.1 Pre-Flight Healthcheck
+Verify that the gateway listener is responding:
 ```bash
-curl -s -X POST "$GW/v1/chat/completions" \
+curl -s -o /dev/null -w "%{http_code}\n" "$GW"
+```
+An HTTP `404` response confirms the Envoy listener is active (no root path route is configured).
+
+---
+
+### 5.2 Scenario 1: Employee REST API (GCIP JWT) & Vertex AI Models
+
+Issue a signed GCIP JWT token and invoke Google Cloud Vertex AI models (Gemini and Claude) through the gateway.
+
+```bash
+# 1. Issue employee JWT token (department: platform)
+export GT=$(./scripts/gcip-token.sh alice platform)
+
+# 2. Invoke Vertex AI Gemini 2.5 Flash
+curl -sS -X POST "$GW/v1/chat/completions" \
+  -H "Authorization: Bearer $GT" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gemini-2.5-flash",
-    "messages": [{"role": "user", "content": "Explain Kubernetes Gateway API in one sentence."}],
-    "max_tokens": 50
-  }' | jq -r '.choices[0].message.content'
+    "messages": [{"role": "user", "content": "Summarize the benefits of Kubernetes Gateway API in one sentence."}],
+    "max_tokens": 1500
+  }' | jq .
 ```
+- **Expected Result**: HTTP `200 OK`. Even though the client has no direct GCP IAM permissions or Vertex API key, the gateway authenticates upstream using its `BackendSecurityPolicy`.
 
-#### 1.2 Google Cloud Vertex AI Claude Sonnet 5
 ```bash
-curl -s -X POST "$GW/v1/chat/completions" \
+# 3. Invoke Vertex AI Claude Sonnet 5 (Anthropic Messages API)
+curl -sS -X POST "$GW/anthropic/v1/messages" \
+  -H "Authorization: Bearer $GT" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "claude-sonnet-5",
-    "messages": [{"role": "user", "content": "Respond with: Claude connection verified."}],
-    "max_tokens": 50
-  }' | jq -r '.choices[0].message.content'
+    "messages": [{"role": "user", "content": "Say hello in Korean"}],
+    "max_tokens": 30
+  }' | jq .
 ```
+- **Expected Result**: HTTP `200 OK` returning a standard `type: "message"` payload from Claude.
 
-#### 1.3 Self-Hosted vLLM Gemma 2B (Round-Robin)
+#### 5.2.1 Employee AI Coding Agent (Claude Code CLI) Integration
+Configure Claude Code (`claude` CLI) on a Cloud Workstation or local machine to route through Envoy AI Gateway using `apiKeyHelper` for dynamic token injection:
+
 ```bash
-curl -s -X POST "$GW/v1/chat/completions" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gemma-rr",
-    "messages": [{"role": "user", "content": "Hello Gemma! What model are you?"}],
-    "max_tokens": 50
-  }' | jq -r '.choices[0].message.content'
+# 1. Generate Claude Code gateway settings
+python3 scripts/prepare_ws_settings.py
+
+# 2. Apply generated settings to Claude Code configuration
+mkdir -p ~/.claude
+cp /tmp/new_settings.json ~/.claude/settings.json
 ```
+- **Key Configuration Settings**:
+  - `"ANTHROPIC_BASE_URL": "$GW/anthropic"`: Routes all requests through the gateway's Anthropic-compatible endpoint.
+  - `"apiKeyHelper"`: Dynamically invokes `gcip-token.sh` to inject fresh corporate JWT tokens.
+  - `"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"`: Prevents experimental beta headers (`advisor-tool-2026-03-01`) from conflicting with Vertex AI's schema validation. See the [Claude Code & Vertex AI Compatibility Guide](claude-code-vertex-compatibility.md) for architectural details.
+
+```bash
+# 3. Run a one-shot prompt via Claude Code CLI
+claude -p "Say hello in 3 words"
+```
+- **Expected Result**: Exits with code `0` and outputs a 3-word greeting routed through Envoy AI Gateway.
 
 ---
 
-### Scenario 2: Corporate Security Authentication & Anti-Spoofing Defense
+### 5.3 Scenario 2: Security Verification — Header Spoofing Defense (`/authtest`)
 
-Verify gateway-enforced identity extraction and header spoofing protection.
+Verify that if a malicious client attempts to spoof their department header (`x-tenant-id: finance-vip`), the gateway overwrites it using the verified JWT claim (`department: platform`).
 
-#### 2.1 Issue Corporate Test JWT
-Generate a test JWT with `department: platform` using the cluster's test script:
+> [!NOTE]
+> `/authtest` routes to an echo server (`mendhak/http-https-echo`) behind the same Gateway `SecurityPolicy` to inspect the exact headers delivered upstream.
+
 ```bash
-export GT=$(python3 scripts/gcip-token.sh generate --dept platform)
-```
-
-#### 2.2 Anti-Spoofing Defense Test (`/authtest`)
-Simulate an attacker attempting to forge an `x-tenant-id: finance-vip` header while authenticating with a valid `platform` JWT:
-```bash
-curl -s -X POST "$GW/authtest" \
+curl -sS -X POST "$GW/authtest" \
   -H "Authorization: Bearer $GT" \
   -H "x-tenant-id: finance-vip" \
   -H "Content-Type: application/json" \
-  -d '{"probe": "anti-spoofing"}' | jq .
+  -d '{}' | jq .headers
 ```
-
-**Expected Result**:
-The gateway overwrites the client-supplied `finance-vip` header with the token claim `platform`. The echo server returns `"x-tenant-id": "platform"`, proving zero-trust header integrity.
+- **Expected Result**: The echoed `"x-tenant-id"` header is `"platform"` (from the signed JWT claim), neutralizing the client's `"finance-vip"` spoofing attempt.
 
 ---
 
-### Scenario 3: External Partner API Key Authentication & Quota Isolation
+### 5.4 Scenario 3: Internal Microservice (Google SA ID Token)
 
-#### 3.1 Issue Dynamic Partner API Keys
+Verify keyless authentication for internal microservices or batch jobs using Google Service Account OpenID Connect (OIDC) ID tokens. In a local terminal, use `--impersonate-service-account` to mint an OIDC token with a custom audience:
+
 ```bash
-export KEYISSUER_POD=$(kubectl get pod -n routing -l app=keyissuer -o jsonpath='{.items[0].metadata.name}')
+# 1. Mint Google SA ID token (impersonation and audience required)
+export SA_EMAIL="envoy-ai-workload-sa@${GCP_PROJECT}.iam.gserviceaccount.com"
+export SA_TOKEN=$(gcloud auth print-identity-token \
+  --impersonate-service-account="$SA_EMAIL" \
+  --audiences=https://agent-router.internal \
+  --include-email)
 
-# Issue 60 tokens/min key for acme-corp
-export ACME_KEY=$(kubectl exec -n routing $KEYISSUER_POD -- \
-  python3 -c "import urllib.request, json; req = urllib.request.Request('http://localhost:8080/issue', data=json.dumps({'client_id':'acme-corp','department':'partner'}).encode(), headers={'Content-Type':'application/json'}); print(json.loads(urllib.request.urlopen(req).read())['api_key'])")
-
-# Issue 500 tokens/min key for globex
-export GLOBEX_KEY=$(kubectl exec -n routing $KEYISSUER_POD -- \
-  python3 -c "import urllib.request, json; req = urllib.request.Request('http://localhost:8080/issue', data=json.dumps({'client_id':'globex','department':'partner'}).encode(), headers={'Content-Type':'application/json'}); print(json.loads(urllib.request.urlopen(req).read())['api_key'])")
-```
-
-#### 3.2 Partner Domain Authorized Call
-```bash
-curl -s -X POST "$GW/v1/chat/completions" \
-  -H "Host: $PARTNER_HOST" \
-  -H "X-API-Key: $ACME_KEY" \
+# 2. Invoke self-hosted Gemma 2B model
+curl -sS -X POST "$GW/v1/chat/completions" \
+  -H "Authorization: Bearer $SA_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gemma-rr",
-    "messages": [{"role": "user", "content": "Partner request test."}],
-    "max_tokens": 20
-  }' | jq -r '.choices[0].message.content'
+    "messages": [{"role": "user", "content": "Healthcheck from microservice"}],
+    "max_tokens": 15
+  }' | jq .
 ```
+- **Expected Result**: HTTP `200 OK` with `system_fingerprint` showing `vllm-0.29.0`. The gateway extracts the `email` claim and injects it into `x-tenant-id`.
 
-#### 3.3 Unauthorized Model Access Defense
-Attempting to invoke high-cost models like `claude-sonnet-5` through the partner domain is rejected immediately:
+---
+
+### 5.5 Scenario 4: External Partner Integration & Quota Isolation (API Key)
+
+Verify model allowlisting and independent per-partner token rate limiting using API keys.
+
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" -X POST "$GW/v1/chat/completions" \
+# 1. Retrieve pre-deployed partner API keys
+export AK=$(kubectl get secret partner-api-keys -n routing -o jsonpath='{.data.acme-corp}' | base64 -d)
+export GK=$(kubectl get secret partner-api-keys -n routing -o jsonpath='{.data.globex}' | base64 -d)
+
+# 2. Dynamically issue a new partner key via Key Issuer
+kubectl exec -n routing deploy/keyissuer -- python3 /app/client.py | jq .
+
+# 3. Invoke authorized model (gemma-rr)
+curl -sS -X POST "$GW/v1/chat/completions" \
   -H "Host: $PARTNER_HOST" \
-  -H "X-API-Key: $ACME_KEY" \
+  -H "X-API-Key: $AK" \
   -H "Content-Type: application/json" \
-  -d '{"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "probe"}]}'
+  -d '{"model":"gemma-rr","messages":[{"role":"user","content":"Partner API test"}],"max_tokens":16}' | jq .
 ```
-**Expected Result**: `404` (Route Not Found — unauthorized models are blocked at the routing layer).
 
-#### 3.4 Multi-Tenant Quota Isolation Test
-Send requests exceeding `acme-corp`'s 60-token limit:
 ```bash
-for i in {1..3}; do
-  CODE=$(curl -s -o /dev/null -w "%{http_code}\n" -X POST "$GW/v1/chat/completions" \
+# 4. Verify unauthorized high-cost model (claude-sonnet-5) is blocked
+curl -sS -i -X POST "$GW/v1/chat/completions" \
+  -H "Host: $PARTNER_HOST" \
+  -H "X-API-Key: $AK" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-sonnet-5","messages":[{"role":"user","content":"Blocked"}]}' | head -n 1
+```
+- **Expected Result**: `HTTP/1.1 404 Not Found`. High-cost models are excluded from the partner route.
+
+```bash
+# 5. Verify tenant quota isolation (exhaust acme-corp 60 tokens/min budget)
+for i in {1..6}; do
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$GW/v1/chat/completions" \
     -H "Host: $PARTNER_HOST" \
-    -H "X-API-Key: $ACME_KEY" \
+    -H "X-API-Key: $AK" \
     -H "Content-Type: application/json" \
-    -d '{"model": "gemma-rr", "messages": [{"role": "user", "content": "Quota limit test prompt."}], "max_tokens": 40}')
-  echo "acme-corp request $i: HTTP $CODE"
+    -d '{"model":"gemma-rr","messages":[{"role":"user","content":"Quota test"}],"max_tokens":20}')
+  echo "Acme Request $i: HTTP $CODE"
+done
+
+# 6. Immediately invoke using globex key (verify independent token bucket)
+curl -s -o /dev/null -w "Globex Concurrent Request: HTTP %{http_code}\n" -X POST "$GW/v1/chat/completions" \
+  -H "Host: $PARTNER_HOST" \
+  -H "X-API-Key: $GK" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gemma-rr","messages":[{"role":"user","content":"Globex check"}],"max_tokens":10}'
+```
+- **Expected Result**: `acme-corp` is throttled with `HTTP 429 Too Many Requests` once its 60 token/min budget is exhausted, while `globex` immediately succeeds with `HTTP 200`.
+
+---
+
+### 5.6 Scenario 5: Gemma-EPP Prefix Cache Acceleration
+
+Send a ~2,000-token shared system prompt to measure TTFT (Time to First Token) acceleration between the 1st Cold request and 2nd Warm request, and inspect per-pod Prometheus cache hit counters.
+
+```bash
+# 1. Generate test payloads with shared long context
+cat << 'EOF' > /tmp/make_prefix_payload.py
+import json
+ctx = "Google Kubernetes Engine and Gateway API enterprise prompt context. " * 150
+with open('/tmp/p1.json', 'w') as f:
+    json.dump({'model':'gemma-epp','messages':[{'role':'user','content':ctx+'\nQuestion 1: Summarize the infrastructure setup.'}],'stream':True,'max_tokens':30}, f)
+with open('/tmp/p2.json', 'w') as f:
+    json.dump({'model':'gemma-epp','messages':[{'role':'user','content':ctx+'\nQuestion 2: Explain prefix caching benefits.'}],'stream':True,'max_tokens':30}, f)
+EOF
+python3 /tmp/make_prefix_payload.py
+
+# 2. 1st Cold Request (populates KV cache)
+curl -N -s -o /dev/null -X POST "$GW/v1/chat/completions" \
+  -H "Authorization: Bearer $GT" \
+  -H "Content-Type: application/json" \
+  -d @/tmp/p1.json \
+  -w "[1st Cold TTFT]: %{time_starttransfer}s\n"
+
+# 3. 2nd Warm Request (routed to cached pod by EPP prefix-cache-scorer)
+curl -N -s -o /dev/null -X POST "$GW/v1/chat/completions" \
+  -H "Authorization: Bearer $GT" \
+  -H "Content-Type: application/json" \
+  -d @/tmp/p2.json \
+  -w "[2nd Warm TTFT]: %{time_starttransfer}s\n"
+```
+- **Expected Result**: 2nd Warm TTFT is significantly faster than 1st Cold TTFT because EPP's `prefix-cache-scorer` routes the request directly to the GPU pod holding the KV cache.
+
+```bash
+# 4. Verify vLLM per-pod Prefix Cache hit counters
+for POD in $(kubectl get pods -n vllm -l app=vllm-server -o jsonpath='{.items[*].metadata.name}'); do
+  echo "=== GPU Pod: $POD ==="
+  kubectl exec -n vllm $POD -c vllm -- curl -s http://localhost:8000/metrics \
+    | grep -E "vllm:prefix_cache_hits_total"
 done
 ```
-When `acme-corp` receives `HTTP 429 Too Many Requests`, test `globex`:
-```bash
-curl -s -o /dev/null -w "%{http_code}\n" -X POST "$GW/v1/chat/completions" \
-  -H "Host: $PARTNER_HOST" \
-  -H "X-API-Key: $GLOBEX_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model": "gemma-rr", "messages": [{"role": "user", "content": "Globex test."}], "max_tokens": 20}'
-```
-**Expected Result**: `globex` receives `HTTP 200`, confirming strict tenant budget isolation.
+- **Expected Result**: Only the specific vLLM pod that processed the 1st request shows an increase of ~1,500+ tokens in `vllm:prefix_cache_hits_total`.
 
 ---
 
-### Scenario 4: EPP Prefix Cache-Aware Routing Acceleration
+### 5.7 Scenario 6: Full-Stack Enterprise Observability
 
-Evaluate the latency reduction achieved by intelligent prefix-cache routing:
-
-#### 4.1 Warm Up Long System Prompt (~2,000 Tokens)
+Inspect distributed traces in Arize Phoenix:
 ```bash
-LONG_PROMPT="You are a principal cloud enterprise architect. Analyze the distributed systems architecture, resilience mechanisms, and high-availability design for the following specifications in comprehensive detail: $(python3 -c 'print("System requirement block: " + "alpha beta gamma delta epsilon " * 350)')"
-
-# Request 1 (Cold Cache)
-curl -s -w "\nTotal Time: %{time_total}s\n" -X POST "$GW/v1/chat/completions" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"model\": \"gemma-epp\",
-    \"messages\": [{\"role\": \"system\", \"content\": \"$LONG_PROMPT\"}, {\"role\": \"user\", \"content\": \"Summarize phase 1.\"}],
-    \"max_tokens\": 30
-  }"
+kubectl port-forward -n phoenix svc/phoenix-service 6006:6006
 ```
-
-#### 4.2 Request 2 (Warm Cache Hit)
-```bash
-curl -s -w "\nTotal Time: %{time_total}s\n" -X POST "$GW/v1/chat/completions" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"model\": \"gemma-epp\",
-    \"messages\": [{\"role\": \"system\", \"content\": \"$LONG_PROMPT\"}, {\"role\": \"user\", \"content\": \"Summarize phase 2.\"}],
-    \"max_tokens\": 30
-  }"
-```
-**Expected Result**: Request 2 completes in ~0.14s (a **5.5x acceleration** over the cold run) because `llm-d-router` routes the request to the exact GPU pod caching the KV blocks.
+1. Open `http://localhost:6006` in your browser.
+2. Navigate to `Traces` to inspect the OpenInference spans captured from your requests.
+3. Verify `gen_ai.request.model`, `llm_total_token`, `tenant_id`, and latency breakdown.
 
 ---
 
-### Scenario 5: Enterprise Observability in Arize Phoenix
+## 6. Troubleshooting FAQ
 
-1. Forward the Arize Phoenix Web UI to your local machine:
-   ```bash
-   kubectl port-forward -n phoenix svc/phoenix-service 6006:6006
-   ```
-2. Open `http://localhost:6006` in your browser.
-3. In the **Traces** tab, inspect real-time inference traces emitted by Agent Router:
-   - Request latency, TTFT (Time-to-First-Token), prompt token count, and completion token count.
-   - Input/output payload spans preserved across PostgreSQL 16 backing storage.
-
----
-
-### Scenario 6: In-Cluster 3-Way Comparative Benchmark
-
-Launch the automated in-cluster benchmarking suite to evaluate 16 prompts across all three routing arms:
-```bash
-kubectl apply -k tests/e2e/benchmark/
-
-# Stream benchmark execution logs
-kubectl logs -n default -l job-name=e2e-benchmark -f
-```
+| Symptom | Root Cause | Remediation |
+|---|---|---|
+| `Too long: may not be more than 262144 bytes` during CRD install | Client-side `apply` annotation limit exceeded | Use server-side apply: `kubectl apply --server-side -f manifests/00-setup/agent-router-crds.yaml`. |
+| vLLM pod in `CrashLoopBackOff` | Missing `HF_TOKEN` or unaccepted model license | Accept the `google/gemma-2-2b-it` license on Hugging Face and re-apply `hf-token`. |
+| HTTP 500 when calling Vertex AI models | Missing `vertex-ai-sa-key` Secret | Run `make setup-secrets` to generate and mount the service account key in `routing`. |
+| `Invalid account type for --audiences` during token minting | Missing `--impersonate-service-account` flag on user credentials | Include `--impersonate-service-account="envoy-ai-workload-sa@${GCP_PROJECT}.iam.gserviceaccount.com"`. |
+| `400 Unexpected value(s) advisor-tool-2026-03-01` in Claude Code | Experimental beta header rejected by Vertex AI | Add `"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"` to `env` in `~/.claude/settings.json`. |
+| `429 Too Many Requests` on partner route | Partner token per-minute quota exhausted | Wait 60 seconds for window reset or issue a fresh key via `keyissuer`. |
+| `500 Unexpected end of JSON` on `/authtest` | Missing request body for echo JSON parser | Include `-d '{}'` in your `curl` command. |
 
 ---
 
-## 6. Environment Teardown
+## 7. Step 4: Clean Teardown & Cost Prevention
 
-To avoid incurring ongoing cloud infrastructure costs after completing the workshop, delete all provisioned resources:
+To avoid ongoing charges after completing the workshop, delete all Kubernetes workloads first so the GCP LoadBalancer is released from the VPC before destroying Terraform resources (or simply run `make clean`):
 
 ```bash
-# 1. Delete Kubernetes workloads
-kubectl delete -k manifests/07-observability
-kubectl delete -k manifests/06-traffic-policy
-kubectl delete -k manifests/05-routing
-kubectl delete -k manifests/04-inference-pool
-kubectl delete -k manifests/03-vllm
-kubectl delete -k manifests/02-security
-kubectl delete -k manifests/01-gateway
+# 1. Delete K8s workloads and wait for LoadBalancer release
+kubectl delete -k manifests/07-observability --ignore-not-found
+kubectl delete -k manifests/06-traffic-policy --ignore-not-found
+kubectl delete -k manifests/05-routing --ignore-not-found
+kubectl delete -k manifests/04-inference-pool --ignore-not-found
+kubectl delete -k manifests/03-vllm --ignore-not-found
+kubectl delete -k manifests/02-security --ignore-not-found
+kubectl delete -k manifests/01-gateway --ignore-not-found
+sleep 20
 
-# 2. Destroy GCP infrastructure via Terraform
+# 2. Destroy all Terraform infrastructure (~10-15 minutes)
 cd terraform
-terraform destroy -auto-approve
+terraform destroy -var="project_id=$GCP_PROJECT" -var="region=$GCP_REGION" -auto-approve
+cd ..
 ```
-
----
-
-## 7. Troubleshooting FAQ
-
-### Q1. vLLM pod is stuck in `CrashLoopBackOff` during startup.
-- **Cause**: The Hugging Face token is missing or unauthorized to pull `google/gemma-2-2b-it`.
-- **Fix**: Re-check Section 2.2. Ensure terms were accepted on Hugging Face and regenerate `hf-secret` in namespace `vllm`.
-
-### Q2. Cloud SQL Auth Proxy fails to connect.
-- **Cause**: Workload Identity IAM binding is incomplete or Cloud SQL Admin API is disabled.
-- **Fix**: Verify `gcloud services list --enabled | grep sqladmin` and ensure `roles/cloudsql.client` is granted to the `phoenix-sa` GSA.
-
-### Q3. Gateway returns `HTTP 404 Route Not Found`.
-- **Cause**: The request body `model` parameter does not match any configured route in `AIGatewayRoute`, or body buffering is disabled.
-- **Fix**: Verify that `aigateway.envoyproxy.io/processing-body-mode: buffered` is present on the Gateway and that the `model` parameter matches one of `gemini-2.5-flash`, `claude-sonnet-5`, `gemma-rr`, `gemma-epp`, or `gemma-epp-noprefix`.

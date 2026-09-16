@@ -115,22 +115,45 @@ Raw verification artifacts are available in `.agents/reports/benchmark-summary-p
 
 ### 7.2 One-Command Deployment
 ```bash
-# 1. Export Hugging Face token
+# 1. Export GCP Project ID and Hugging Face token
+export GCP_PROJECT="<YOUR_PROJECT_ID>"
+export GCP_REGION="asia-southeast1"
 export HF_TOKEN="hf_your_token_here"
 
-# 2. Provision infrastructure and apply manifests
+# 2. Enable required GCP APIs (for new projects)
+gcloud services enable compute.googleapis.com container.googleapis.com \
+  sqladmin.googleapis.com storage.googleapis.com iam.googleapis.com \
+  iamcredentials.googleapis.com aiplatform.googleapis.com \
+  identitytoolkit.googleapis.com firebase.googleapis.com --project=$GCP_PROJECT
+
+# 3. Provision infrastructure and deploy manifests end-to-end
 make deploy
 
-# 3. Execute 3-way comparative benchmark suite
+# 4. Execute 3-way comparative benchmark suite
 make benchmark
 
-# 4. Clean teardown and stop billing
+# 5. Clean teardown and stop billing (detaches K8s LoadBalancer before Terraform destroy)
 make clean
 ```
 
 ### 7.3 Step-by-Step Manifest Application
 Manifests are organized into numbered directories following execution dependencies:
 ```bash
+# 0. Substitute placeholders and create backend credentials secret
+make update-manifests
+make setup-secrets
+
+# 1. Install CRDs and core controllers
+kubectl apply --server-side -f manifests/00-setup/agent-router-crds.yaml
+kubectl apply -f manifests/00-setup/envoy-gateway-controller.yaml
+kubectl apply -f manifests/00-setup/gie-install.yaml
+kubectl apply -f manifests/00-setup/agent-router.yaml
+kubectl apply -f manifests/00-setup/envoy-gateway-config.yaml
+kubectl apply -f manifests/00-setup/envoy-ai-gateway-ratelimit-svc.yaml
+kubectl rollout status deployment/envoy-gateway -n envoy-gateway-system --timeout=180s
+kubectl rollout status deployment/ai-gateway-controller -n default --timeout=180s
+
+# 2. Apply gateway and workload manifests sequentially
 kubectl apply -k manifests/01-gateway
 kubectl apply -k manifests/02-security
 kubectl apply -k manifests/03-vllm
