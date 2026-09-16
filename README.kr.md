@@ -143,3 +143,4 @@ kubectl apply -k manifests/07-observability
 
 상세한 시나리오별 검증 방법은 [수동 테스트 가이드](tests/manual-test-guide.kr.md)를 참고하십시오.
 GCP 계정 권한, L4 GPU 쿼터 확인 및 허깅페이스 토큰 설정을 포함한 단계별 튜토리얼은 [고객 워크숍 가이드](docs/workshop-guide.kr.md)를 참고하십시오.
+Claude Code의 실험적 베타 헤더(advisor-tool-2026-03-01)와 Vertex AI 간 호환성 이슈 원인 분석 및 게이트웨이 단 해결 방안은 [Claude Code 및 Vertex AI 호환성 가이드](docs/claude-code-vertex-compatibility.kr.md)를 참고하십시오.

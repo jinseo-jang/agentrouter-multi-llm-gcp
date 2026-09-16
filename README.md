@@ -142,3 +142,4 @@ kubectl apply -k manifests/07-observability
 
 For step-by-step verification commands, see the [Manual Testing Guide](tests/manual-test-guide.md).
 For a comprehensive workshop walkthrough including IAM, GPU quota checks, and HF Token setup, see the [Customer Workshop Guide](docs/workshop-guide.md).
+For root-cause analysis and gateway-side architectural solutions regarding Claude Code experimental beta headers (advisor-tool-2026-03-01) on Vertex AI, see the [Claude Code & Vertex AI Compatibility Guide](docs/claude-code-vertex-compatibility.md).
