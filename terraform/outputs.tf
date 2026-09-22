@@ -28,3 +28,22 @@ output "region" {
   description = "GCP Region"
 }
 
+output "model_armor_location" {
+  value       = var.model_armor_location
+  description = "Google Cloud Model Armor Regional Endpoint Location"
+}
+
+output "model_armor_template_id" {
+  value       = local.model_armor_template_id
+  description = "Google Cloud Model Armor Guardrail Template ID"
+}
+
+output "sdp_inspect_template_name" {
+  value       = google_data_loss_prevention_inspect_template.ai_guardrail_inspect.id
+  description = "Cloud DLP (Sensitive Data Protection) Inspect Template Resource Name"
+}
+
+output "sdp_deidentify_template_name" {
+  value       = google_data_loss_prevention_deidentify_template.ai_guardrail_deid.id
+  description = "Cloud DLP (Sensitive Data Protection) De-identify Template Resource Name"
+}

@@ -1,0 +1,408 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-armor-extproc-code
+  namespace: routing
+data:
+  ext_proc.proto: |
+    syntax = "proto3";
+    package envoy.service.ext_proc.v3;
+
+    service ExternalProcessor {
+      rpc Process(stream ProcessingRequest) returns (stream ProcessingResponse) {}
+    }
+
+    message HeaderValue {
+      string key = 1;
+      string value = 2;
+      bytes raw_value = 3;
+    }
+
+    message HeaderValueOption {
+      HeaderValue header = 1;
+    }
+
+    message HeaderMap {
+      repeated HeaderValue headers = 1;
+    }
+
+    message HeaderMutation {
+      repeated HeaderValueOption set_headers = 1;
+      repeated string remove_headers = 2;
+    }
+
+    message HttpHeaders {
+      HeaderMap headers = 1;
+      bool end_of_stream = 3;
+    }
+
+    message HttpBody {
+      bytes body = 1;
+      bool end_of_stream = 2;
+    }
+
+    message HttpTrailers {
+      HeaderMap trailers = 1;
+    }
+
+    message BodyMutation {
+      oneof mutation {
+        bytes body = 1;
+        bool clear_body = 2;
+      }
+    }
+
+    message CommonResponse {
+      enum ResponseStatus {
+        CONTINUE = 0;
+        CONTINUE_AND_REPLACE = 1;
+      }
+      ResponseStatus status = 1;
+      HeaderMutation header_mutation = 2;
+      BodyMutation body_mutation = 3;
+    }
+
+    message HeadersResponse {
+      CommonResponse response = 1;
+    }
+
+    message BodyResponse {
+      CommonResponse response = 1;
+    }
+
+    message TrailersResponse {
+      HeaderMutation header_mutation = 1;
+    }
+
+    message HttpStatus {
+      uint32 code = 1;
+    }
+
+    message ImmediateResponse {
+      HttpStatus status = 1;
+      HeaderMutation headers = 2;
+      bytes body = 3;
+      string details = 5;
+    }
+
+    message ProcessingRequest {
+      oneof request {
+        HttpHeaders request_headers = 2;
+        HttpHeaders response_headers = 3;
+        HttpBody request_body = 4;
+        HttpBody response_body = 5;
+        HttpTrailers request_trailers = 6;
+        HttpTrailers response_trailers = 7;
+      }
+      bool observability_mode = 10;
+    }
+
+    message ProcessingResponse {
+      oneof response {
+        HeadersResponse request_headers = 1;
+        HeadersResponse response_headers = 2;
+        BodyResponse request_body = 3;
+        BodyResponse response_body = 4;
+        TrailersResponse request_trailers = 5;
+        TrailersResponse response_trailers = 6;
+        ImmediateResponse immediate_response = 7;
+      }
+    }
+  server.py: |
+    #!/usr/bin/env python3
+    """Envoy External Processing (ext_proc) gRPC Server for Google Cloud Model Armor."""
+    import json
+    import logging
+    import os
+    import sys
+    from concurrent import futures
+
+    sys.path.insert(0, "/tmp")
+    import grpc
+    import google.auth
+    from google.auth.transport.requests import AuthorizedSession
+    import ext_proc_pb2 as ep_pb2
+    import ext_proc_pb2_grpc as ep_grpc
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    logger = logging.getLogger("model-armor-extproc")
+
+    PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "PROJECT_ID_PLACEHOLDER")
+    LOCATION = os.environ.get("MODEL_ARMOR_LOCATION", "MODEL_ARMOR_LOCATION_PLACEHOLDER")
+    TEMPLATE_ID = os.environ.get("MODEL_ARMOR_TEMPLATE_ID", "MODEL_ARMOR_TEMPLATE_ID_PLACEHOLDER")
+    SDP_DEIDENTIFY_ENABLED = os.environ.get("SDP_DEIDENTIFY_ENABLED", "true").lower() == "true"
+    FAIL_OPEN = os.environ.get("FAIL_OPEN", "false").lower() == "true"
+
+
+    def make_header(key: str, val: str) -> ep_pb2.HeaderValueOption:
+        return ep_pb2.HeaderValueOption(
+            header=ep_pb2.HeaderValue(key=key, value=val, raw_value=val.encode("utf-8"))
+        )
+
+
+    class ModelArmorClient:
+        def __init__(self, project_id: str, location: str, template_id: str):
+            creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+            self.session = AuthorizedSession(creds)
+            self.base_url = (
+                f"https://modelarmor.{location}.rep.googleapis.com/v1/"
+                f"projects/{project_id}/locations/{location}/templates/{template_id}"
+            )
+
+        def sanitize_prompt(self, text: str):
+            resp = self.session.post(
+                f"{self.base_url}:sanitizeUserPrompt",
+                json={"userPromptData": {"text": text}},
+                timeout=2.5,
+            )
+            resp.raise_for_status()
+            data = resp.json().get("sanitizationResult", {})
+            filters = data.get("filterResults", {})
+
+            sdp = filters.get("sdp", {}).get("sdpFilterResult", {})
+            sanitized = sdp.get("deidentifyResult", {}).get("data", {}).get("text", text)
+
+            if filters.get("piAndJailbreak", {}).get("piAndJailbreakFilterResult", {}).get("matchState") == "MATCH_FOUND":
+                return True, text, "PROMPT_INJECTION_OR_JAILBREAK"
+            if filters.get("maliciousUris", {}).get("maliciousUriFilterResult", {}).get("matchState") == "MATCH_FOUND":
+                return True, text, "MALICIOUS_URI_DETECTED"
+            if filters.get("rai", {}).get("raiFilterResult", {}).get("matchState") == "MATCH_FOUND":
+                return True, text, "RESPONSIBLE_AI_VIOLATION"
+            if not SDP_DEIDENTIFY_ENABLED and sdp.get("inspectResult", {}).get("matchState") == "MATCH_FOUND":
+                return True, text, "SENSITIVE_DATA_PII_DETECTED"
+
+            return False, sanitized, "ALLOWED"
+
+        def sanitize_response(self, text: str, user_prompt: str = ""):
+            payload = {"modelResponseData": {"text": text}}
+            if user_prompt:
+                payload["userPrompt"] = user_prompt
+            resp = self.session.post(
+                f"{self.base_url}:sanitizeModelResponse",
+                json=payload,
+                timeout=2.5,
+            )
+            resp.raise_for_status()
+            data = resp.json().get("sanitizationResult", {})
+            filters = data.get("filterResults", {})
+            sdp = filters.get("sdp", {}).get("sdpFilterResult", {})
+            sanitized = sdp.get("deidentifyResult", {}).get("data", {}).get("text", text)
+
+            if filters.get("rai", {}).get("raiFilterResult", {}).get("matchState") == "MATCH_FOUND":
+                return True, text, "UNSAFE_MODEL_OUTPUT"
+            return False, sanitized, "ALLOWED"
+
+
+    class Servicer(ep_grpc.ExternalProcessorServicer):
+        def __init__(self, client: ModelArmorClient):
+            self.client = client
+
+        def _block(self, reason: str, stage: str, tenant_id: str):
+            body = json.dumps({
+                "error": {
+                    "message": f"Blocked by Google Cloud Model Armor ({stage}): {reason}",
+                    "type": "model_armor_guardrail_violation",
+                    "code": reason,
+                    "tenant_id": tenant_id,
+                }
+            }, ensure_ascii=False).encode("utf-8")
+            return ep_pb2.ProcessingResponse(
+                immediate_response=ep_pb2.ImmediateResponse(
+                    status=ep_pb2.HttpStatus(code=403),
+                    headers=ep_pb2.HeaderMutation(
+                        set_headers=[
+                            make_header("content-type", "application/json"),
+                            make_header("x-model-armor-action", f"BLOCKED_{stage}"),
+                            make_header("x-model-armor-reason", reason),
+                        ]
+                    ),
+                    body=body,
+                    details=f"model_armor_blocked_{reason.lower()}",
+                )
+            )
+
+        def Process(self, request_iterator, context):
+            tenant_id = "anonymous"
+            last_prompt = ""
+            for req in request_iterator:
+                w = req.WhichOneof("request")
+                if w == "request_headers":
+                    for h in req.request_headers.headers.headers:
+                        if h.key.lower() == "x-tenant-id":
+                            tenant_id = h.raw_value.decode("utf-8", errors="ignore") or h.value
+                    yield ep_pb2.ProcessingResponse(request_headers=ep_pb2.HeadersResponse())
+
+                elif w == "request_body":
+                    raw = req.request_body.body.decode("utf-8", errors="ignore")
+                    try:
+                        payload = json.loads(raw)
+                        mutated = False
+                        for msg in payload.get("messages", []):
+                            if msg.get("role") in ("user", "system") and isinstance(msg.get("content"), str):
+                                orig = msg["content"]
+                                last_prompt = orig
+                                blocked, sanitized, reason = self.client.sanitize_prompt(orig)
+                                if blocked:
+                                    logger.warning("Blocked prompt (tenant=%s, reason=%s)", tenant_id, reason)
+                                    yield self._block(reason, "REQUEST", tenant_id)
+                                    return
+                                if sanitized != orig:
+                                    logger.info("Redacted PII in prompt (tenant=%s)", tenant_id)
+                                    msg["content"] = sanitized
+                                    mutated = True
+                        if mutated:
+                            new_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                            yield ep_pb2.ProcessingResponse(
+                                request_body=ep_pb2.BodyResponse(
+                                    response=ep_pb2.CommonResponse(
+                                        header_mutation=ep_pb2.HeaderMutation(
+                                            set_headers=[
+                                                make_header("content-length", str(len(new_bytes))),
+                                                make_header("x-model-armor-action", "REDACTED_PII"),
+                                            ]
+                                        ),
+                                        body_mutation=ep_pb2.BodyMutation(body=new_bytes),
+                                    )
+                                )
+                            )
+                        else:
+                            yield ep_pb2.ProcessingResponse(request_body=ep_pb2.BodyResponse())
+                    except Exception as e:
+                        logger.error("Request body inspection failed: %s", e)
+                        if FAIL_OPEN:
+                            yield ep_pb2.ProcessingResponse(request_body=ep_pb2.BodyResponse())
+                        else:
+                            yield self._block("MODEL_ARMOR_ERROR", "REQUEST", tenant_id)
+                            return
+
+                elif w == "response_headers":
+                    yield ep_pb2.ProcessingResponse(response_headers=ep_pb2.HeadersResponse())
+
+                elif w == "response_body":
+                    raw = req.response_body.body.decode("utf-8", errors="ignore")
+                    try:
+                        payload = json.loads(raw)
+                        mutated = False
+                        for ch in payload.get("choices", []):
+                            msg = ch.get("message", {})
+                            content = msg.get("content")
+                            if isinstance(content, str) and content:
+                                blocked, sanitized, reason = self.client.sanitize_response(content, last_prompt)
+                                if blocked:
+                                    logger.warning("Blocked model response (tenant=%s, reason=%s)", tenant_id, reason)
+                                    yield self._block(reason, "RESPONSE", tenant_id)
+                                    return
+                                if sanitized != content:
+                                    msg["content"] = sanitized
+                                    mutated = True
+                        if mutated:
+                            new_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                            yield ep_pb2.ProcessingResponse(
+                                response_body=ep_pb2.BodyResponse(
+                                    response=ep_pb2.CommonResponse(
+                                        header_mutation=ep_pb2.HeaderMutation(
+                                            set_headers=[
+                                                make_header("content-length", str(len(new_bytes))),
+                                                make_header("x-model-armor-response", "REDACTED_PII"),
+                                            ]
+                                        ),
+                                        body_mutation=ep_pb2.BodyMutation(body=new_bytes),
+                                    )
+                                )
+                            )
+                        else:
+                            yield ep_pb2.ProcessingResponse(response_body=ep_pb2.BodyResponse())
+                    except Exception:
+                        yield ep_pb2.ProcessingResponse(response_body=ep_pb2.BodyResponse())
+
+
+    if __name__ == "__main__":
+        srv = grpc.server(futures.ThreadPoolExecutor(max_workers=16))
+        ep_grpc.add_ExternalProcessorServicer_to_server(
+            Servicer(ModelArmorClient(PROJECT_ID, LOCATION, TEMPLATE_ID)), srv
+        )
+        srv.add_insecure_port("[::]:9002")
+        logger.info("Model Armor ext_proc gRPC server listening on :9002 (template=%s)", TEMPLATE_ID)
+        srv.start()
+        srv.wait_for_termination()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-armor-extproc
+  namespace: routing
+  labels:
+    app: model-armor-extproc
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: model-armor-extproc
+  template:
+    metadata:
+      labels:
+        app: model-armor-extproc
+    spec:
+      # Uses envoy-ai-ksa bound to envoy-ai-workload-sa (roles/modelarmor.admin, roles/dlp.user)
+      serviceAccountName: envoy-ai-ksa
+      containers:
+        - name: extproc
+          image: python:3.11-slim
+          command:
+            - /bin/sh
+            - -c
+            - |
+              pip install --no-cache-dir grpcio grpcio-tools google-auth requests protobuf &&
+              python3 -m grpc_tools.protoc -I/app --python_out=/tmp --grpc_python_out=/tmp /app/ext_proc.proto &&
+              python3 /app/server.py
+          ports:
+            - name: grpc
+              containerPort: 9002
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: 9002
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          env:
+            - name: GCP_PROJECT_ID
+              value: "PROJECT_ID_PLACEHOLDER"
+            - name: MODEL_ARMOR_LOCATION
+              value: "MODEL_ARMOR_LOCATION_PLACEHOLDER"
+            - name: MODEL_ARMOR_TEMPLATE_ID
+              value: "MODEL_ARMOR_TEMPLATE_ID_PLACEHOLDER"
+            - name: SDP_DEIDENTIFY_ENABLED
+              value: "true"
+            - name: FAIL_OPEN
+              value: "false"
+          volumeMounts:
+            - name: code-vol
+              mountPath: /app
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+      volumes:
+        - name: code-vol
+          configMap:
+            name: model-armor-extproc-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: model-armor-extproc-svc
+  namespace: routing
+  labels:
+    app: model-armor-extproc
+spec:
+  type: ClusterIP
+  selector:
+    app: model-armor-extproc
+  ports:
+    - name: grpc
+      port: 9002
+      targetPort: 9002
+      appProtocol: kubernetes.io/h2c

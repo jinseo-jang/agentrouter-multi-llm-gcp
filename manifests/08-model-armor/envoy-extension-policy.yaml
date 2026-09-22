@@ -1,0 +1,28 @@
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyExtensionPolicy
+metadata:
+  name: model-armor-guardrail-policy
+  namespace: routing
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: envoy-ai-gateway
+  extProc:
+    - backendRefs:
+        - group: ""
+          kind: Service
+          name: model-armor-extproc-svc
+          namespace: routing
+          port: 9002
+      messageTimeout: 3s
+      failOpen: false
+      processingMode:
+        request:
+          body: Buffered
+        response:
+          body: Buffered
+      metadata:
+        accessibleNamespaces:
+          - envoy.filters.http.jwt_authn
+          - io.envoy.ai_gateway
