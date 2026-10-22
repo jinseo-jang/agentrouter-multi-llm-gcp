@@ -579,23 +579,90 @@ def build_extproc_servicer(ep_pb2, ep_grpc, model_armor_base_url: str):
                 elif w == "response_body":
                     raw = req.response_body.body.decode("utf-8", errors="ignore")
                     try:
-                        payload = json.loads(raw)
                         mutated = False
-                        for ch in payload.get("choices", []):
-                            msg = ch.get("message", {})
-                            content = msg.get("content")
-                            if isinstance(content, str) and content:
-                                blocked, sanitized, reason = self.client.sanitize_response(
-                                    content, last_prompt
-                                )
-                                if blocked:
-                                    yield self._block(reason, "RESPONSE", tenant_id)
-                                    return
-                                if sanitized != content:
-                                    msg["content"] = sanitized
-                                    mutated = True
+                        new_bytes = b""
+                        stripped = raw.lstrip()
+                        if stripped.startswith("data:"):
+                            lines = raw.splitlines(keepends=True)
+                            parsed_lines = []
+                            choice_chunks = {}
+                            saw_data_json = False
+                            for line in lines:
+                                s_line = line.strip()
+                                if s_line.startswith("data:"):
+                                    data_str = s_line[5:].strip()
+                                    if data_str and data_str != "[DONE]":
+                                        chunk_obj = json.loads(data_str)
+                                        saw_data_json = True
+                                        ending = (
+                                            "\r\n"
+                                            if line.endswith("\r\n")
+                                            else ("\n" if line.endswith("\n") else "")
+                                        )
+                                        parsed_lines.append([True, chunk_obj, ending])
+                                        for ch in chunk_obj.get("choices", []):
+                                            idx = ch.get("index", 0)
+                                            container = (
+                                                ch.get("delta")
+                                                if isinstance(ch.get("delta"), dict)
+                                                else ch.get("message")
+                                            )
+                                            if (
+                                                isinstance(container, dict)
+                                                and isinstance(container.get("content"), str)
+                                                and container.get("content")
+                                            ):
+                                                choice_chunks.setdefault(idx, []).append(container)
+                                        continue
+                                parsed_lines.append([False, line, ""])
+
+                            if not saw_data_json:
+                                raise ValueError("No valid JSON chunks found in SSE response body")
+
+                            for idx, containers in choice_chunks.items():
+                                full_text = "".join(c["content"] for c in containers)
+                                if full_text:
+                                    blocked, sanitized, reason = self.client.sanitize_response(
+                                        full_text, last_prompt
+                                    )
+                                    if blocked:
+                                        yield self._block(reason, "RESPONSE", tenant_id)
+                                        return
+                                    if sanitized != full_text:
+                                        containers[0]["content"] = sanitized
+                                        for c in containers[1:]:
+                                            c["content"] = ""
+                                        mutated = True
+
+                            if mutated:
+                                rebuilt = []
+                                for is_json_chunk, item, ending in parsed_lines:
+                                    if is_json_chunk:
+                                        rebuilt.append(
+                                            f"data: {json.dumps(item, ensure_ascii=False)}{ending}"
+                                        )
+                                    else:
+                                        rebuilt.append(item)
+                                new_bytes = "".join(rebuilt).encode("utf-8")
+                        else:
+                            payload = json.loads(raw)
+                            for ch in payload.get("choices", []):
+                                msg = ch.get("message", {})
+                                content = msg.get("content")
+                                if isinstance(content, str) and content:
+                                    blocked, sanitized, reason = self.client.sanitize_response(
+                                        content, last_prompt
+                                    )
+                                    if blocked:
+                                        yield self._block(reason, "RESPONSE", tenant_id)
+                                        return
+                                    if sanitized != content:
+                                        msg["content"] = sanitized
+                                        mutated = True
+                            if mutated:
+                                new_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
                         if mutated:
-                            new_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
                             yield ep_pb2.ProcessingResponse(
                                 response_body=ep_pb2.BodyResponse(
                                     response=ep_pb2.CommonResponse(
@@ -614,7 +681,8 @@ def build_extproc_servicer(ep_pb2, ep_grpc, model_armor_base_url: str):
                         else:
                             yield ep_pb2.ProcessingResponse(response_body=ep_pb2.BodyResponse())
                     except Exception:
-                        yield ep_pb2.ProcessingResponse(response_body=ep_pb2.BodyResponse())
+                        yield self._block("MODEL_ARMOR_ERROR", "RESPONSE", tenant_id)
+                        return
 
     client_obj = BenchmarkModelArmorClient(model_armor_base_url)
     return Servicer(client_obj), client_obj
