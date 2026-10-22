@@ -94,7 +94,32 @@ GKE Standard 환경에서 NVIDIA L4 GPU 2대, vLLM v0.29.0(`google/gemma-2-2b-it
 - **캐시 편중 방지 및 적중량 확대**: 순수 라운드로빈(`gemma-rr`)은 특정 파드에만 캐시 적중이 쏠리고 다른 파드는 0건을 기록하여 꼬리 지연시간(Eval P99: 1.877s)이 치솟았습니다. 반면 `gemma-epp`는 두 파드 모두 49.8% 수준으로 고르게 캐시를 분산 적중시켜 총 25,184 토큰(순수 라운드로빈 대비 **2.38배**)을 적중시켰습니다.
 - **보안 필터 무영향 검증**: Gateway 레벨에서 JWT 서명 검증 필터가 동작함에도 불구하고 `gemma-epp`의 Eval P50은 0.139s로 인증 도입 전 기준선(0.148s) 대비 성능 저하가 없었습니다.
 
-원시 로그 및 상세 데이터는 `.agents/reports/benchmark-summary-postauth.md` 및 `tests/e2e/benchmark/job.yaml`을 확인하십시오.
+### 5.3 Google Cloud Model Armor (`08-model-armor`) 적용 전·후 E2E 지연시간 비교
+
+GKE 클러스터, LLM 백엔드(`gemma-epp` Warm Cache), 그리고 Google Cloud Model Armor 및 Cloud DLP 템플릿을 모두 **동일 리전(`asia-southeast1`)**에 배치한 상태에서 `EnvoyExtensionPolicy`(`ext_proc`, 요청·응답 `Buffered` 모드) 가드레일 적용 전(`Before`)과 적용 후(`After`)의 **전체 요청-응답 완료 시간(Total E2E Latency)**을 비교 측정한 결과입니다 (시나리오당 **Warmup 3회 + 본 측정 $N=50$회**).
+
+#### 1) 게이트웨이 E2E 전·후 지연시간 비교 (`gemma-epp` Warm Cache 기준, $N=50$)
+
+| 구분 | 시나리오 | P50 (중앙값) | P95 | P99 | 평균 (Mean) | 적용 전(`182.7ms`) 대비 증감 ($\Delta$ P50) | 백엔드 LLM 호출 |
+|---|---|---:|---:|---:|---:|---:|---|
+| **적용 전 (Before)** | 가드레일 OFF (`EnvoyExtensionPolicy` 미적용) | **182.7 ms** *(TTFT 136.6 ms)* | **212.5 ms** | **217.0 ms** | **183.4 ms** | 기준선 (Baseline) | 호출됨 (100%) |
+| **적용 후 (After #1)** | **정상 프롬프트 (`ALLOWED`)** — 요청 + 응답 양방향 검사 (2회) | **287.6 ms** | **324.8 ms** | **338.6 ms** | **290.6 ms** | **+101.6 ms** (+55.6%) | 호출됨 (100%) |
+| **적용 후 (After #2)** | **PII 포함 프롬프트 (`REDACTED_PII`)** — Cloud DLP 마스킹(`BodyMutation`) + 응답 검사 | **310.8 ms** | **350.1 ms** | **362.7 ms** | **313.5 ms** | **+131.0 ms** (+71.7%) | 마스킹 후 호출됨 |
+| **적용 후 (After #3)** | **프롬프트 인젝션 / 탈옥 시도 (`BLOCKED_REQUEST`)** — `ext_proc` 즉시 `HTTP 403` 차단 | **61.2 ms** | **105.5 ms** | **118.8 ms** | **66.3 ms** | **-121.5 ms (-66.5% 단축)** | **호출 차단 (0%)** |
+
+#### 2) Model Armor 단일 API 호출 단계별 소요 시간 ($N=50$)
+
+| 단일 검사 단계 (Component) | 수행 작업 | P50 | P95 | P99 | 평균 (Mean) |
+|---|---|---:|---:|---:|---:|
+| **`:sanitizeUserPrompt` (Clean)** | 프롬프트 인젝션/탈옥 + 악성 URI + RAI + SDP 탐지 | **52.9 ms** | 66.2 ms | 85.6 ms | 54.2 ms |
+| **`:sanitizeUserPrompt` (PII 마스킹)** | 위 탐지 + Cloud DLP 비식별화 변환(`[KOREA_RRN]`, `[EMAIL_ADDRESS]`) | **72.7 ms** | 88.2 ms | 91.7 ms | 73.2 ms |
+| **`:sanitizeUserPrompt` (Jailbreak)** | 프롬프트 인젝션/탈옥 패턴 매칭 (`MATCH_FOUND`) | **58.4 ms** | 67.7 ms | 70.4 ms | 57.3 ms |
+| **`:sanitizeModelResponse` (응답 검사)** | LLM 생성 응답 RAI + SDP 유출 검사 | **46.3 ms** | 63.5 ms | 68.4 ms | 48.3 ms |
+
+- **정상 요청 및 PII 마스킹 오버헤드**: 동일 리전(`asia-southeast1`) 환경에서 요청·응답 양방향 가드레일 검사를 수행할 때 정상 프롬프트는 **P50 기준 `+101.6ms`**(`52.9ms` + `46.3ms`), Cloud DLP 마스킹(`BodyMutation`)이 동반되는 PII 프롬프트는 **`+131.0ms`**가 추가됩니다.
+- **프롬프트 인젝션 / 탈옥 조기 차단 효과**: 공격 프롬프트 인입 시 백엔드 LLM 추론(`~182.7ms`)과 응답 검사를 모두 건너뛰고 게이트웨이 `model-armor-extproc` 단에서 **P50 `61.2ms` 만에 즉시 `HTTP 403 Forbidden`을 반환**하므로, 가드레일 미적용 상태에서 공격 프롬프트가 백엔드 LLM까지 도달해 처리되던 시간 대비 **응답 시간이 66.5%(`-121.5ms`) 단축**되며 백엔드 GPU 연산 및 토큰 비용을 100% 절감합니다.
+
+원시 로그 및 상세 데이터는 `.agents/reports/benchmark-summary-postauth.md`, `tests/e2e/benchmark/job.yaml`, 그리고 `tests/e2e/benchmark/benchmark_model_armor.py`(`make benchmark-model-armor`)를 확인하십시오.
 
 ---
 
@@ -130,8 +155,9 @@ gcloud services enable compute.googleapis.com container.googleapis.com \
 # 3. 인프라 프로비저닝 및 매니페스트 원스톱 배포
 make deploy
 
-# 4. 3대 라우팅 비교 벤치마크 실행
+# 4. 3대 라우팅 비교 벤치마크 및 Model Armor 지연시간 벤치마크 실행
 make benchmark
+make benchmark-model-armor
 
 # 5. 인프라 정리 및 비용 차단 (LoadBalancer 선삭제 후 Terraform Destroy)
 make clean
@@ -162,6 +188,7 @@ kubectl apply -k manifests/04-inference-pool
 kubectl apply -k manifests/05-routing
 kubectl apply -k manifests/06-traffic-policy
 kubectl apply -k manifests/07-observability
+kubectl apply -k manifests/08-model-armor
 ```
 
 상세한 시나리오별 검증 방법은 [수동 테스트 가이드](tests/manual-test-guide.kr.md)를 참고하십시오.

@@ -10,7 +10,7 @@ variable "region" {
 }
 
 variable "model_armor_location" {
-  description = "The location for Google Cloud Model Armor and SDP templates (e.g. us-central1, europe-west4, asia-southeast1)"
+  description = "The location for Google Cloud Model Armor and SDP templates (co-located with GKE/LLM region)"
   type        = string
-  default     = "us-central1"
+  default     = "asia-southeast1"
 }

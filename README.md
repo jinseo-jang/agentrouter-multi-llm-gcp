@@ -93,7 +93,32 @@ Measured in GKE Standard on 2x NVIDIA L4 GPUs using vLLM v0.29.0 (`google/gemma-
 - **Balanced Cache Affinity**: Pure round-robin suffered from cache imbalance (one pod received all hits, the other 0), causing tail latency (Eval P99: 1.877s) to spike. `gemma-epp` distributed hits evenly (49.8% hit rate per pod) and delivered 25,184 cached tokens (**2.38x higher** than round-robin).
 - **Zero Auth Overhead**: Gateway JWT authentication added under 1ms overhead, with Eval P50 holding steady at 0.139s.
 
-Raw verification artifacts are available in `.agents/reports/benchmark-summary-postauth.md` and `tests/e2e/benchmark/job.yaml`.
+### 5.3 Google Cloud Model Armor (`08-model-armor`) Before vs. After E2E Latency Comparison
+
+Measured with GKE, the LLM backend (`gemma-epp` Warm Cache), and Google Cloud Model Armor + Cloud DLP templates all co-located in the **same region (`asia-southeast1`)**. The table below compares **Total End-to-End (E2E) Latency** before (`Before`) and after (`After`) enabling the `EnvoyExtensionPolicy` (`ext_proc` with `Buffered` request and response inspection, **3 warmup + $N=50$ measured requests per scenario**).
+
+#### 1) Gateway E2E Before vs. After Latency (`gemma-epp` Warm Cache Baseline, $N=50$)
+
+| Stage | Scenario | P50 (Median) | P95 | P99 | Mean | $\Delta$ P50 vs. Before (`182.7ms`) | Backend LLM Call |
+|---|---|---:|---:|---:|---:|---:|---|
+| **Before** | Guardrail OFF (`EnvoyExtensionPolicy` disabled) | **182.7 ms** *(TTFT 136.6 ms)* | **212.5 ms** | **217.0 ms** | **183.4 ms** | Baseline | Invoked (100%) |
+| **After #1** | **Clean Prompt (`ALLOWED`)** — Request + Response scan (2 calls) | **287.6 ms** | **324.8 ms** | **338.6 ms** | **290.6 ms** | **+101.6 ms** (+55.6%) | Invoked (100%) |
+| **After #2** | **PII Prompt (`REDACTED_PII`)** — Cloud DLP de-identification (`BodyMutation`) + Response scan | **310.8 ms** | **350.1 ms** | **362.7 ms** | **313.5 ms** | **+131.0 ms** (+71.7%) | Invoked after masking |
+| **After #3** | **Prompt Injection / Jailbreak (`BLOCKED_REQUEST`)** — Early `HTTP 403` block at `ext_proc` | **61.2 ms** | **105.5 ms** | **118.8 ms** | **66.3 ms** | **-121.5 ms (-66.5% faster)** | **Blocked (0%)** |
+
+#### 2) Model Armor Per-Call Component Breakdown ($N=50$)
+
+| Component API Call | Operation | P50 | P95 | P99 | Mean |
+|---|---|---:|---:|---:|---:|
+| **`:sanitizeUserPrompt` (Clean)** | PI/Jailbreak + Malicious URI + RAI + SDP inspect | **52.9 ms** | 66.2 ms | 85.6 ms | 54.2 ms |
+| **`:sanitizeUserPrompt` (PII Redaction)** | Above + Cloud DLP de-identify (`[KOREA_RRN]`, `[EMAIL_ADDRESS]`) | **72.7 ms** | 88.2 ms | 91.7 ms | 73.2 ms |
+| **`:sanitizeUserPrompt` (Jailbreak)** | Prompt Injection / Jailbreak match (`MATCH_FOUND`) | **58.4 ms** | 67.7 ms | 70.4 ms | 57.3 ms |
+| **`:sanitizeModelResponse` (Response)** | LLM output RAI + SDP leakage inspection | **46.3 ms** | 63.5 ms | 68.4 ms | 48.3 ms |
+
+- **Clean & PII Guardrail Overhead**: In a co-located same-region deployment (`asia-southeast1`), full bidirectional inspection adds **`+101.6ms` at P50** for clean prompts (`52.9ms` request scan + `46.3ms` response scan) and **`+131.0ms` at P50** when Cloud DLP de-identification (`BodyMutation`) rewrites PII in the request body.
+- **Early Block Speedup on Prompt Injection / Jailbreak**: Adversarial prompts are intercepted immediately at `model-armor-extproc` (`HTTP 403 Forbidden` in **P50 `61.2ms`**), bypassing backend LLM inference (`~182.7ms`) and response scanning—reducing total turnaround time by **66.5% (`-121.5ms`)** and saving 100% of backend GPU compute and token costs.
+
+Raw verification artifacts are available in `.agents/reports/benchmark-summary-postauth.md`, `tests/e2e/benchmark/job.yaml`, and `tests/e2e/benchmark/benchmark_model_armor.py` (`make benchmark-model-armor`).
 
 ---
 
@@ -129,8 +154,9 @@ gcloud services enable compute.googleapis.com container.googleapis.com \
 # 3. Provision infrastructure and deploy manifests end-to-end
 make deploy
 
-# 4. Execute 3-way comparative benchmark suite
+# 4. Execute 3-way routing benchmark and Model Armor latency benchmark
 make benchmark
+make benchmark-model-armor
 
 # 5. Clean teardown and stop billing (detaches K8s LoadBalancer before Terraform destroy)
 make clean
@@ -161,6 +187,7 @@ kubectl apply -k manifests/04-inference-pool
 kubectl apply -k manifests/05-routing
 kubectl apply -k manifests/06-traffic-policy
 kubectl apply -k manifests/07-observability
+kubectl apply -k manifests/08-model-armor
 ```
 
 For step-by-step verification commands, see the [Manual Testing Guide](tests/manual-test-guide.md).

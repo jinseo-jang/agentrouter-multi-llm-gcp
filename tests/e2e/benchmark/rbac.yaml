@@ -14,6 +14,9 @@ rules:
 - apiGroups: [""]
   resources: ["pods", "pods/status", "services"]
   verbs: ["get", "list", "watch", "delete", "deletecollection"]
+- apiGroups: ["gateway.envoyproxy.io"]
+  resources: ["envoyextensionpolicies"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
