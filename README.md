@@ -93,11 +93,16 @@ Measured in GKE Standard on 2x NVIDIA L4 GPUs using vLLM v0.29.0 (`google/gemma-
 - **Balanced Cache Affinity**: Pure round-robin suffered from cache imbalance (one pod received all hits, the other 0), causing tail latency (Eval P99: 1.877s) to spike. `gemma-epp` distributed hits evenly (49.8% hit rate per pod) and delivered 25,184 cached tokens (**2.38x higher** than round-robin).
 - **Zero Auth Overhead**: Gateway JWT authentication added under 1ms overhead, with Eval P50 holding steady at 0.139s.
 
-### 5.3 Google Cloud Model Armor (`08-model-armor`) Before vs. After E2E Latency Comparison
+### 5.3 Google Cloud Model Armor (`08-model-armor`) Before vs. After E2E Latency Comparison (Simulated)
 
-Measured with GKE, the LLM backend (`gemma-epp` Warm Cache), and Google Cloud Model Armor + Cloud DLP templates all co-located in the **same region (`asia-southeast1`)**. The table below compares **Total End-to-End (E2E) Latency** before (`Before`) and after (`After`) enabling the `EnvoyExtensionPolicy` (`ext_proc` with `Buffered` request and response inspection, **3 warmup + $N=50$ measured requests per scenario**).
+> ⚠️ **The numbers below are simulated, not measured.** They come from the **local mode** of `make benchmark-model-armor` (`--mode=local`).
+> The ext_proc logic runs as real code, but Model Armor API and vLLM backend latencies are sampled from assumed distributions (lognormal, fixed seed). They are not measurements from a real GKE environment.
+> The Before baseline also assumes a **`gemma-epp` warm cache (prefix cache hit)**. A cold-cache request takes longer, so the relative guardrail overhead (%) would be smaller.
+> Read these values as a reference for the overhead structure of each guardrail path. Real numbers can be collected with `--mode=cluster`.
 
-#### 1) Gateway E2E Before vs. After Latency (`gemma-epp` Warm Cache Baseline, $N=50$)
+Simulated assuming GKE, the LLM backend (`gemma-epp` Warm Cache), and Google Cloud Model Armor + Cloud DLP templates all co-located in the **same region (`asia-southeast1`)**. The table below compares **Total End-to-End (E2E) Latency** before (`Before`) and after (`After`) enabling the `EnvoyExtensionPolicy` (`ext_proc` with `Buffered` request and response inspection, **3 warmup + $N=50$ simulated requests per scenario**).
+
+#### 1) Gateway E2E Before vs. After Latency (Simulated, `gemma-epp` Warm Cache Baseline, $N=50$)
 
 | Stage | Scenario | P50 (Median) | P95 | P99 | Mean | $\Delta$ P50 vs. Before (`182.7ms`) | Backend LLM Call |
 |---|---|---:|---:|---:|---:|---:|---|
@@ -106,7 +111,7 @@ Measured with GKE, the LLM backend (`gemma-epp` Warm Cache), and Google Cloud Mo
 | **After #2** | **PII Prompt (`REDACTED_PII`)** — Cloud DLP de-identification (`BodyMutation`) + Response scan | **310.8 ms** | **350.1 ms** | **362.7 ms** | **313.5 ms** | **+131.0 ms** (+71.7%) | Invoked after masking |
 | **After #3** | **Prompt Injection / Jailbreak (`BLOCKED_REQUEST`)** — Early `HTTP 403` block at `ext_proc` | **61.2 ms** | **105.5 ms** | **118.8 ms** | **66.3 ms** | **-121.5 ms (-66.5% faster)** | **Blocked (0%)** |
 
-#### 2) Model Armor Per-Call Component Breakdown ($N=50$)
+#### 2) Model Armor Per-Call Component Breakdown (Simulated, sampled latencies, $N=50$)
 
 | Component API Call | Operation | P50 | P95 | P99 | Mean |
 |---|---|---:|---:|---:|---:|
@@ -115,10 +120,10 @@ Measured with GKE, the LLM backend (`gemma-epp` Warm Cache), and Google Cloud Mo
 | **`:sanitizeUserPrompt` (Jailbreak)** | Prompt Injection / Jailbreak match (`MATCH_FOUND`) | **58.4 ms** | 67.7 ms | 70.4 ms | 57.3 ms |
 | **`:sanitizeModelResponse` (Response)** | LLM output RAI + SDP leakage inspection | **46.3 ms** | 63.5 ms | 68.4 ms | 48.3 ms |
 
-- **Clean & PII Guardrail Overhead**: In a co-located same-region deployment (`asia-southeast1`), full bidirectional inspection adds **`+101.6ms` at P50** for clean prompts (`52.9ms` request scan + `46.3ms` response scan) and **`+131.0ms` at P50** when Cloud DLP de-identification (`BodyMutation`) rewrites PII in the request body.
-- **Early Block Speedup on Prompt Injection / Jailbreak**: Adversarial prompts are intercepted immediately at `model-armor-extproc` (`HTTP 403 Forbidden` in **P50 `61.2ms`**), bypassing backend LLM inference (`~182.7ms`) and response scanning—reducing total turnaround time by **66.5% (`-121.5ms`)** and saving 100% of backend GPU compute and token costs.
+- **Clean & PII Guardrail Overhead**: In the simulated co-located same-region deployment (`asia-southeast1`), full bidirectional inspection adds **`+101.6ms` at P50** for clean prompts (`52.9ms` request scan + `46.3ms` response scan) and **`+131.0ms` at P50** when Cloud DLP de-identification (`BodyMutation`) rewrites PII in the request body.
+- **Early Block Speedup on Prompt Injection / Jailbreak**: Adversarial prompts are intercepted immediately at `model-armor-extproc` and the backend LLM is never called, saving 100% of backend GPU compute and token costs. In this simulation, the `HTTP 403 Forbidden` returns at **P50 `61.2ms`**, skipping warm-cache backend inference (`~182.7ms`) and response scanning, which works out to **66.5% (`-121.5ms`)** less turnaround time. This is a simulated value, and the gap would be larger against a cold-cache or longer-generation baseline.
 
-Raw verification artifacts are available in `.agents/reports/benchmark-summary-postauth.md`, `tests/e2e/benchmark/job.yaml`, and `tests/e2e/benchmark/benchmark_model_armor.py` (`make benchmark-model-armor`).
+Raw verification artifacts are available in `.agents/reports/benchmark-summary-postauth.md`, `tests/e2e/benchmark/job.yaml`, and `tests/e2e/benchmark/benchmark_model_armor.py` (`make benchmark-model-armor`; the 5.3 numbers come from its local simulation mode).
 
 ---
 

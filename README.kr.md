@@ -94,11 +94,17 @@ GKE Standard 환경에서 NVIDIA L4 GPU 2대, vLLM v0.29.0(`google/gemma-2-2b-it
 - **캐시 편중 방지 및 적중량 확대**: 순수 라운드로빈(`gemma-rr`)은 특정 파드에만 캐시 적중이 쏠리고 다른 파드는 0건을 기록하여 꼬리 지연시간(Eval P99: 1.877s)이 치솟았습니다. 반면 `gemma-epp`는 두 파드 모두 49.8% 수준으로 고르게 캐시를 분산 적중시켜 총 25,184 토큰(순수 라운드로빈 대비 **2.38배**)을 적중시켰습니다.
 - **보안 필터 무영향 검증**: Gateway 레벨에서 JWT 서명 검증 필터가 동작함에도 불구하고 `gemma-epp`의 Eval P50은 0.139s로 인증 도입 전 기준선(0.148s) 대비 성능 저하가 없었습니다.
 
-### 5.3 Google Cloud Model Armor (`08-model-armor`) 적용 전·후 E2E 지연시간 비교
+### 5.3 Google Cloud Model Armor (`08-model-armor`) 적용 전·후 E2E 지연시간 비교 (시뮬레이션)
 
-GKE 클러스터, LLM 백엔드(`gemma-epp` Warm Cache), 그리고 Google Cloud Model Armor 및 Cloud DLP 템플릿을 모두 **동일 리전(`asia-southeast1`)**에 배치한 상태에서 `EnvoyExtensionPolicy`(`ext_proc`, 요청·응답 `Buffered` 모드) 가드레일 적용 전(`Before`)과 적용 후(`After`)의 **전체 요청-응답 완료 시간(Total E2E Latency)**을 비교 측정한 결과입니다 (시나리오당 **Warmup 3회 + 본 측정 $N=50$회**).
+> ⚠️ 아래 수치는 `make benchmark-model-armor`의 **로컬 모드 시뮬레이션**(`--mode=local`) 결과입니다.
+> ext_proc 처리 로직은 실제 코드로 실행했지만, Model Armor API와 vLLM 백엔드의 지연시간은
+> 가정한 분포(lognormal, seed 고정)에서 샘플링한 값이며 실제 GKE 환경 측정치가 아닙니다.
+> 또한 적용 전(Before) 기준선은 **`gemma-epp` Warm Cache(접두사 캐시 적중) 상태**를 가정한 값입니다. Cold Cache 요청은 기준선이 더 길어 가드레일 오버헤드 비율(%)이 더 작게 나타납니다.
+> 가드레일 경로별 오버헤드 구조를 보여주는 참고치로 봐 주세요. 실측은 `--mode=cluster`로 수집할 수 있습니다.
 
-#### 1) 게이트웨이 E2E 전·후 지연시간 비교 (`gemma-epp` Warm Cache 기준, $N=50$)
+GKE 클러스터, LLM 백엔드(`gemma-epp` Warm Cache), 그리고 Google Cloud Model Armor 및 Cloud DLP 템플릿을 모두 **동일 리전(`asia-southeast1`)**에 배치한 상태에서 `EnvoyExtensionPolicy`(`ext_proc`, 요청·응답 `Buffered` 모드) 가드레일 적용 전(`Before`)과 적용 후(`After`)의 **전체 요청-응답 완료 시간(Total E2E Latency)**을 비교 시뮬레이션한 결과입니다 (시나리오당 **Warmup 3회 + 본 시뮬레이션 $N=50$회**).
+
+#### 1) 게이트웨이 E2E 전·후 지연시간 비교 (시뮬레이션, `gemma-epp` Warm Cache 기준, $N=50$)
 
 | 구분 | 시나리오 | P50 (중앙값) | P95 | P99 | 평균 (Mean) | 적용 전(`182.7ms`) 대비 증감 ($\Delta$ P50) | 백엔드 LLM 호출 |
 |---|---|---:|---:|---:|---:|---:|---|
@@ -107,7 +113,7 @@ GKE 클러스터, LLM 백엔드(`gemma-epp` Warm Cache), 그리고 Google Cloud 
 | **적용 후 (After #2)** | **PII 포함 프롬프트 (`REDACTED_PII`)** — Cloud DLP 마스킹(`BodyMutation`) + 응답 검사 | **310.8 ms** | **350.1 ms** | **362.7 ms** | **313.5 ms** | **+131.0 ms** (+71.7%) | 마스킹 후 호출됨 |
 | **적용 후 (After #3)** | **프롬프트 인젝션 / 탈옥 시도 (`BLOCKED_REQUEST`)** — `ext_proc` 즉시 `HTTP 403` 차단 | **61.2 ms** | **105.5 ms** | **118.8 ms** | **66.3 ms** | **-121.5 ms (-66.5% 단축)** | **호출 차단 (0%)** |
 
-#### 2) Model Armor 단일 API 호출 단계별 소요 시간 ($N=50$)
+#### 2) Model Armor 단일 API 호출 단계별 소요 시간 (시뮬레이션 샘플링 값, $N=50$)
 
 | 단일 검사 단계 (Component) | 수행 작업 | P50 | P95 | P99 | 평균 (Mean) |
 |---|---|---:|---:|---:|---:|
@@ -116,10 +122,10 @@ GKE 클러스터, LLM 백엔드(`gemma-epp` Warm Cache), 그리고 Google Cloud 
 | **`:sanitizeUserPrompt` (Jailbreak)** | 프롬프트 인젝션/탈옥 패턴 매칭 (`MATCH_FOUND`) | **58.4 ms** | 67.7 ms | 70.4 ms | 57.3 ms |
 | **`:sanitizeModelResponse` (응답 검사)** | LLM 생성 응답 RAI + SDP 유출 검사 | **46.3 ms** | 63.5 ms | 68.4 ms | 48.3 ms |
 
-- **정상 요청 및 PII 마스킹 오버헤드**: 동일 리전(`asia-southeast1`) 환경에서 요청·응답 양방향 가드레일 검사를 수행할 때 정상 프롬프트는 **P50 기준 `+101.6ms`**(`52.9ms` + `46.3ms`), Cloud DLP 마스킹(`BodyMutation`)이 동반되는 PII 프롬프트는 **`+131.0ms`**가 추가됩니다.
-- **프롬프트 인젝션 / 탈옥 조기 차단 효과**: 공격 프롬프트 인입 시 백엔드 LLM 추론(`~182.7ms`)과 응답 검사를 모두 건너뛰고 게이트웨이 `model-armor-extproc` 단에서 **P50 `61.2ms` 만에 즉시 `HTTP 403 Forbidden`을 반환**하므로, 가드레일 미적용 상태에서 공격 프롬프트가 백엔드 LLM까지 도달해 처리되던 시간 대비 **응답 시간이 66.5%(`-121.5ms`) 단축**되며 백엔드 GPU 연산 및 토큰 비용을 100% 절감합니다.
+- **정상 요청 및 PII 마스킹 오버헤드**: 동일 리전(`asia-southeast1`)을 가정한 시뮬레이션에서 요청·응답 양방향 가드레일 검사를 수행할 때 정상 프롬프트는 **P50 기준 `+101.6ms`**(`52.9ms` + `46.3ms`), Cloud DLP 마스킹(`BodyMutation`)이 동반되는 PII 프롬프트는 **`+131.0ms`**가 추가됩니다.
+- **프롬프트 인젝션 / 탈옥 조기 차단 효과**: 공격 프롬프트는 게이트웨이 `model-armor-extproc` 단에서 즉시 `HTTP 403 Forbidden`으로 차단되어 백엔드 LLM을 호출하지 않으므로 백엔드 GPU 연산 및 토큰 비용을 100% 절감합니다. 이번 시뮬레이션에서는 Warm Cache 백엔드 추론(`~182.7ms`)과 응답 검사를 건너뛰고 **P50 `61.2ms`** 만에 차단 응답을 반환해 **응답 시간이 66.5%(`-121.5ms`) 단축**되었습니다. 이 단축률은 시뮬레이션 값이며, Cold Cache나 긴 생성 응답을 기준으로 하면 차이는 더 커집니다.
 
-원시 로그 및 상세 데이터는 `.agents/reports/benchmark-summary-postauth.md`, `tests/e2e/benchmark/job.yaml`, 그리고 `tests/e2e/benchmark/benchmark_model_armor.py`(`make benchmark-model-armor`)를 확인하십시오.
+원시 로그 및 상세 데이터는 `.agents/reports/benchmark-summary-postauth.md`, `tests/e2e/benchmark/job.yaml`, 그리고 `tests/e2e/benchmark/benchmark_model_armor.py`(`make benchmark-model-armor`, 5.3 수치는 로컬 시뮬레이션 모드 결과)를 확인하십시오.
 
 ---
 
