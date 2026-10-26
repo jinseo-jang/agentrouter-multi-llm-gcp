@@ -451,7 +451,7 @@ kubectl exec -n routing deploy/echo-server -- wget -qO- \
 
 ---
 
-### 5.8 Scenario 7: Google Cloud Model Armor & Cloud DLP Guardrails (Prompt Injection Block, PII Redaction & E2E Latency)
+### 5.8 Scenario 7: Google Cloud Model Armor & Cloud DLP Guardrails (Prompt Injection Block & PII Redaction)
 
 Verify that **Google Cloud Model Armor** and **Sensitive Data Protection (Cloud DLP)** integrated via Envoy `EnvoyExtensionPolicy` (`ext_proc`) proactively block prompt injection/jailbreak attacks and mask PII before reaching the backend LLM (`claude-sonnet-5`).
 
@@ -489,19 +489,6 @@ curl -i -sS -X POST "$GW/v1/chat/completions" \
   }'
 ```
 - **Expected Result**: The Cloud DLP de-identification template masks the resident registration number and email into `[KOREA_RRN]` and `[EMAIL_ADDRESS]` via `BodyMutation` before forwarding to `claude-sonnet-5`, returning `HTTP/1.1 200 OK`.
-
-#### 3) Model Armor Before vs. After E2E Latency Comparison (Same-Region `asia-southeast1`, $N=50$)
-
-```bash
-make benchmark-model-armor
-```
-
-| Stage | Scenario | P50 (Median) | P95 | P99 | Mean | $\Delta$ P50 vs. Before (`182.7ms`) | Backend LLM Call |
-|---|---|---:|---:|---:|---:|---:|---|
-| **Before** | Guardrail OFF (`EnvoyExtensionPolicy` disabled) | **182.7 ms** *(TTFT 136.6 ms)* | **212.5 ms** | **217.0 ms** | **183.4 ms** | Baseline | Invoked (100%) |
-| **After #1** | **Clean Prompt (`ALLOWED`)** — Request (`52.9ms`) + Response (`46.3ms`) scan | **287.6 ms** | **324.8 ms** | **338.6 ms** | **290.6 ms** | **+101.6 ms** (+55.6%) | Invoked (100%) |
-| **After #2** | **PII Prompt (`REDACTED_PII`)** — Cloud DLP masking (`72.7ms`) + Response (`46.3ms`) scan | **310.8 ms** | **350.1 ms** | **362.7 ms** | **313.5 ms** | **+131.0 ms** (+71.7%) | Invoked after masking |
-| **After #3** | **Prompt Injection / Jailbreak (`BLOCKED_REQUEST`)** — Early `HTTP 403` block at `ext_proc` | **61.2 ms** | **105.5 ms** | **118.8 ms** | **66.3 ms** | **-121.5 ms (-66.5% faster)** | **Blocked (0%)** |
 
 ---
 

@@ -498,25 +498,6 @@ curl -i -sS -X POST "$GW/v1/chat/completions" \
 ```
 - **예상 결과**: Cloud DLP 비식별화 템플릿이 주민등록번호와 이메일을 `[KOREA_RRN]`, `[EMAIL_ADDRESS]`로 마스킹(`BodyMutation`)하여 `claude-sonnet-5`로 전달하고 정상 응답(`HTTP/1.1 200 OK`)을 반환합니다.
 
-#### 3) Model Armor 가드레일 적용 전·후 E2E 지연시간(Latency) 비교 (동일 리전 `asia-southeast1` 기준)
-
-GKE 클러스터, LLM 백엔드(`gemma-epp` Warm Cache), 그리고 Model Armor / Cloud DLP 템플릿을 모두 **동일 리전(`asia-southeast1`)**에 배치한 상태에서 `make benchmark-model-armor` (시나리오당 **Warmup 3회 + 본 측정 $N=50$회**)로 측정한 **전체 요청-응답 완료 시간(Total E2E Latency)** 전·후 비교표입니다.
-
-```bash
-# Model Armor 적용 전·후 E2E 지연시간 벤치마크 실행 (N=50)
-make benchmark-model-armor
-```
-
-| 구분 | 시나리오 | P50 (중앙값) | P95 | P99 | 평균 (Mean) | 적용 전(`182.7ms`) 대비 증감 ($\Delta$ P50) | 백엔드 LLM 호출 |
-|---|---|---:|---:|---:|---:|---:|---|
-| **적용 전 (Before)** | 가드레일 OFF (`EnvoyExtensionPolicy` 미적용) | **182.7 ms** *(TTFT 136.6 ms)* | **212.5 ms** | **217.0 ms** | **183.4 ms** | 기준선 (Baseline) | 호출됨 (100%) |
-| **적용 후 (After #1)** | **정상 프롬프트 (`ALLOWED`)** — 요청(`52.9ms`) + 응답(`46.3ms`) 양방향 검사 | **287.6 ms** | **324.8 ms** | **338.6 ms** | **290.6 ms** | **+101.6 ms** (+55.6%) | 호출됨 (100%) |
-| **적용 후 (After #2)** | **PII 포함 프롬프트 (`REDACTED_PII`)** — Cloud DLP 마스킹(`72.7ms`) + 응답(`46.3ms`) 검사 | **310.8 ms** | **350.1 ms** | **362.7 ms** | **313.5 ms** | **+131.0 ms** (+71.7%) | 마스킹 후 호출됨 |
-| **적용 후 (After #3)** | **프롬프트 인젝션 / 탈옥 시도 (`BLOCKED_REQUEST`)** — `ext_proc` 즉시 `HTTP 403` 차단 | **61.2 ms** | **105.5 ms** | **118.8 ms** | **66.3 ms** | **-121.5 ms (-66.5% 단축)** | **호출 차단 (0%)** |
-
-- **정상 요청 및 PII 마스킹 오버헤드**: 동일 리전(`asia-southeast1`) 내에서 요청·응답 양방향 버퍼링 검사를 수행할 때 정상 요청은 **P50 기준 `+101.6ms`**, Cloud DLP 비식별화(`BodyMutation`)가 수행되는 PII 요청은 **`+131.0ms`**의 오버헤드만 추가됩니다.
-- **프롬프트 인젝션 / 탈옥 조기 차단(`HTTP 403`) 효과**: 공격 프롬프트는 백엔드 LLM 추론(`~182.7ms`) 및 응답 검사를 거치지 않고 `model-armor-extproc`에서 **P50 `61.2ms` 만에 즉시 차단**되므로, 가드레일 미적용 대비 전체 응답 시간이 **66.5%(`-121.5ms`) 단축**되며 백엔드 GPU 및 외부 LLM 토큰 과금을 100% 절감합니다.
-
 
 ## 6. 트러블슈팅 FAQ
 
