@@ -20,7 +20,7 @@ spec:
             - bash
             - "-c"
             - |
-              pip install --no-cache-dir requests aiohttp kubernetes numpy && cd /app && python -u benchmark.py
+              pip install --no-cache-dir requests aiohttp kubernetes numpy grpcio grpcio-tools && cd /app && python -u benchmark.py && python -u benchmark_model_armor.py
           volumeMounts:
             - name: script-volume
               mountPath: /app

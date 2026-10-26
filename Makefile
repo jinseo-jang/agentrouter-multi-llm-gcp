@@ -2,7 +2,7 @@ export GOOGLE_OAUTH_ACCESS_TOKEN ?= $(shell gcloud auth print-access-token)
 export GCP_PROJECT ?= $(shell gcloud config get-value project 2>/dev/null)
 export GCP_REGION ?= asia-southeast1
 
-.PHONY: deploy deploy-model-armor update-manifests apply-manifests setup-secrets benchmark placeholders clean destroy
+.PHONY: deploy deploy-model-armor update-manifests apply-manifests setup-secrets benchmark benchmark-model-armor placeholders clean destroy
 
 deploy:
 	cd terraform && terraform init && terraform apply -var="project_id=$(GCP_PROJECT)" -var="region=$(GCP_REGION)" -auto-approve
@@ -24,7 +24,7 @@ deploy-model-armor:
 		-target=google_data_loss_prevention_inspect_template.ai_guardrail_inspect \
 		-target=google_data_loss_prevention_deidentify_template.ai_guardrail_deid \
 		-target=null_resource.model_armor_template \
-		-var="project_id=$(GCP_PROJECT)" -var="region=$(GCP_REGION)" -auto-approve
+		-var="project_id=$(GCP_PROJECT)" -var="region=$(GCP_REGION)" -var="model_armor_location=$(GCP_REGION)" -auto-approve
 	@gcloud container clusters get-credentials envoy-ai-gw-cluster --region $(GCP_REGION) --project $(GCP_PROJECT) 2>/dev/null || true
 	$(MAKE) update-manifests
 	kubectl apply -k manifests/08-model-armor
@@ -37,7 +37,7 @@ update-manifests:
 	 BUCKET=$$(cd terraform && terraform output -raw gcs_bucket_name 2>/dev/null || echo "") && \
 	 GSA=$$(cd terraform && terraform output -raw gsa_email 2>/dev/null || echo "") && \
 	 SQL=$$(cd terraform && terraform output -raw sql_connection_name 2>/dev/null || echo "") && \
-	 MA_LOC=$$(cd terraform && terraform output -raw model_armor_location 2>/dev/null); MA_LOC=$${MA_LOC:-us-central1} && \
+	 MA_LOC=$$(cd terraform && terraform output -raw model_armor_location 2>/dev/null); MA_LOC=$${MA_LOC:-$(GCP_REGION)} && \
 	 MA_TMPL=$$(cd terraform && terraform output -raw model_armor_template_id 2>/dev/null || echo "") && \
 	 if [ -n "$$BUCKET" ]; then sed -i "s|GCS_BUCKET_NAME_PLACEHOLDER|$$BUCKET|g" manifests/03-vllm/*.yaml; fi && \
 	 if [ -n "$$GSA" ]; then sed -i "s|GSA_EMAIL_PLACEHOLDER|$$GSA|g" manifests/01-gateway/*.yaml manifests/03-vllm/*.yaml manifests/07-observability/phoenix/*.yaml tests/e2e/benchmark/*.yaml; fi && \
@@ -97,13 +97,23 @@ benchmark:
 	kubectl wait --for=condition=complete job/e2e-benchmark-job -n default --timeout=900s
 	kubectl logs -l app=e2e-benchmark -n default
 
+benchmark-model-armor:
+	@if kubectl cluster-info --request-timeout=5s >/dev/null 2>&1; then \
+		kubectl delete job e2e-benchmark-job -n default --ignore-not-found; \
+		kubectl apply -k tests/e2e/benchmark; \
+		kubectl wait --for=condition=complete job/e2e-benchmark-job -n default --timeout=900s; \
+		kubectl logs -l app=e2e-benchmark -n default; \
+	else \
+		python3 tests/e2e/benchmark/benchmark_model_armor.py --mode=local --iterations=50; \
+	fi
+
 placeholders:
 	@echo "Restoring manifest placeholders for git commit..."
 	@PROJECT_ID=$$(cd terraform && terraform output -raw project_id 2>/dev/null || echo "$(GCP_PROJECT)") && \
 	 BUCKET=$$(cd terraform && terraform output -raw gcs_bucket_name 2>/dev/null || echo "") && \
 	 GSA=$$(cd terraform && terraform output -raw gsa_email 2>/dev/null || echo "") && \
 	 SQL=$$(cd terraform && terraform output -raw sql_connection_name 2>/dev/null || echo "") && \
-	 MA_LOC=$$(cd terraform && terraform output -raw model_armor_location 2>/dev/null || echo "us-central1") && \
+	 MA_LOC=$$(cd terraform && terraform output -raw model_armor_location 2>/dev/null || echo "$(GCP_REGION)") && \
 	 MA_TMPL=$$(cd terraform && terraform output -raw model_armor_template_id 2>/dev/null || echo "") && \
 	 if [ -n "$$BUCKET" ]; then sed -i "s|$$BUCKET|GCS_BUCKET_NAME_PLACEHOLDER|g" manifests/03-vllm/*.yaml; fi && \
 	 if [ -n "$$GSA" ]; then sed -i "s|$$GSA|GSA_EMAIL_PLACEHOLDER|g" manifests/01-gateway/*.yaml manifests/03-vllm/*.yaml manifests/07-observability/phoenix/*.yaml tests/e2e/benchmark/*.yaml; fi && \

@@ -9,4 +9,5 @@ configMapGenerator:
   - name: e2e-benchmark-cm
     files:
       - benchmark.py
+      - benchmark_model_armor.py
       - prompts.json
